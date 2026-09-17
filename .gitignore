@@ -11,3 +11,8 @@ __pycache__/
 .vscode/
 .idea/
 .DS_Store
+
+# runtime state
+daemon.pid
+daemon.log
+cron.log
