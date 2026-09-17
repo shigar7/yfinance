@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Stonks Tracker</title>
 <style>
 :root {
@@ -185,6 +185,8 @@ input[type=text]:focus { outline: 2px solid var(--series-1); outline-offset: 1px
 
 .chart-host { position: relative; width: 100%; }
 svg { display: block; width: 100%; overflow: visible; }
+/* pan-y: a vertical swipe scrolls the page, a horizontal drag scrubs the chart */
+svg .hit { touch-action: pan-y; }
 .tip {
   position: absolute; pointer-events: none; z-index: 5;
   background: var(--surface-1); border: 1px solid var(--border);
@@ -248,10 +250,106 @@ td.chart-cell { padding-right: 2px; }
   font-variant-numeric: tabular-nums;
 }
 
+/* ------------------------------------------------------------- mobile ----
+   Two steps. At 720px the table sheds its two widest columns. At 620px it
+   stops being a table at all: seven numeric columns don't fit a phone by
+   shrinking, they have to be restacked, so each row becomes a two-line card
+   laid out on a grid. The markup is unchanged — only the display model is. */
 @media (max-width: 720px) {
   .hide-sm { display: none; }
   .card { padding: 14px; }
   th, td { padding: 8px 6px; }
+}
+
+@media (max-width: 620px) {
+  body {
+    padding-left: max(12px, env(safe-area-inset-left, 0px));
+    padding-right: max(12px, env(safe-area-inset-right, 0px));
+    padding-bottom: calc(48px + env(safe-area-inset-bottom, 0px));
+  }
+  header { padding: 18px 0 2px; gap: 8px; }
+  h1 { font-size: 18px; }
+  .card { padding: 13px 12px; margin-bottom: 14px; }
+  .card .sub { font-size: 11.5px; }
+
+  /* Period: nine buttons in nine equal columns, full width. A horizontal
+     scroller would hide half the periods off the right edge. */
+  .filters { gap: 10px; padding: 12px 0 14px; margin-bottom: 14px; }
+  .filters .label, .filters .spacer { display: none; }
+  .seg { display: grid; grid-template-columns: repeat(9, 1fr); width: 100%; }
+  .seg button { padding: 9px 2px; font-size: 12px; text-align: center; }
+  #tableview { width: 100%; padding: 9px; }
+
+  /* Quote rows as cards. thead is dropped, so the one cell whose meaning
+     isn't positional (1M) labels itself. */
+  #quotes thead { display: none; }
+  #quotes table, #quotes tbody, #quotes tr, #quotes td { display: block; }
+  #quotes .hide-sm { display: none; }
+  #quotes tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto 30px 30px;
+    grid-template-areas:
+      "sym   price day   move del"
+      "meter meter month move del";
+    align-items: center;
+    gap: 3px 10px;
+    padding: 11px 2px;
+  }
+  #quotes tr[aria-selected="true"] { box-shadow: inset 3px 0 0 var(--series-1); }
+  #quotes tr[aria-selected="true"] td:first-child { box-shadow: none; }
+  #quotes td { padding: 0; }
+  #quotes td:nth-child(1) { grid-area: sym; min-width: 0; }
+  #quotes td:nth-child(2) { grid-area: price; text-align: right; font-weight: 600; }
+  #quotes td:nth-child(3) { grid-area: day; text-align: right; }
+  #quotes td:nth-child(4) { grid-area: month; text-align: right; font-size: 12px; }
+  #quotes td:nth-child(5) { grid-area: meter; }
+  #quotes td.move-cell { grid-area: move; width: auto; justify-self: end; }
+  #quotes td:last-child { grid-area: del; justify-self: end; }
+  #quotes td[data-label]::before {
+    content: attr(data-label) " ";
+    color: var(--text-muted); font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  /* the name is worth its space again once it has a line of its own */
+  #quotes td:first-child .nm {
+    display: block; margin-left: 0; margin-top: 1px; max-width: 100%;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .meter { width: 100%; max-width: 200px; margin-left: 0; }
+  .meter .ends { font-size: 10px; }
+
+  /* 24px is enough for a mouse; a thumb wants 30+ */
+  .move button { width: 30px; height: 28px; font-size: 12px; }
+  .del { padding: 6px 9px; font-size: 18px; }
+  .tab { padding: 10px 11px; }
+  .tab-act { padding: 5px 7px; }
+  .tab-new { padding: 10px; }
+
+  .addrow { gap: 8px; margin-top: 14px; }
+  input[type=text] { flex: 1 1 140px; width: auto; min-width: 0; padding: 9px 10px; }
+  #addbtn { padding: 9px 18px; }
+  .addrow .msg { flex: 1 0 100%; }
+
+  .hero { gap: 6px 10px; margin: 0 0 10px; }
+  .hero .figure { font-size: 27px; }
+  .hero .delta { font-size: 13px; }
+  .tip { min-width: 92px; max-width: 62vw; font-size: 11px; padding: 7px 9px; }
+  .legend { gap: 4px 10px; margin-top: 10px; }
+  .legend button { padding: 5px 4px; }
+  .note { font-size: 11px; }
+}
+
+/* 320-360px (SE-class phones): the symbol column runs out of room against a
+   4-digit price, so trim the type rather than let the two touch. */
+@media (max-width: 380px) {
+  #quotes tr { grid-template-columns: minmax(0, 1fr) auto auto 28px 28px; gap: 3px 7px; }
+  #quotes td:nth-child(2), #quotes td:nth-child(3) { font-size: 13px; }
+  #quotes .sym { font-size: 12.5px; }
+  #quotes .ccy { font-size: 10px; }
+  .meter .ends { font-size: 9.5px; }
+  .move button { width: 28px; }
+  .del { padding: 6px 7px; }
+  .seg button { font-size: 11px; padding: 9px 0; }
 }
 </style>
 </head>
@@ -514,7 +612,7 @@ function renderQuotes() {
       </td>
       <td class="num">${fmtPrice(q.price)} <span class="ccy">${esc(q.currency || "")}</span></td>
       <td class="num ${dirClass(q.changePct)}">${fmtPct(q.changePct)}</td>
-      <td class="num ${dirClass(q.monthPct)}">${fmtPct(q.monthPct)}</td>
+      <td class="num ${dirClass(q.monthPct)}" data-label="1M">${fmtPct(q.monthPct)}</td>
       <td class="meter-cell">${meter(q)}</td>
       <td class="chart-cell hide-sm">${inlineChart(q.spark, yearUp)}</td>
       <td class="move-cell"><span class="move" data-move-group>
@@ -559,12 +657,13 @@ function lineChart(host, opts) {
   if (!live.length) { host.innerHTML = `<p class="loading">No data for this period.</p>`; return; }
 
   const single = live.length === 1;
-  const W = Math.max(host.clientWidth || 640, 320);
-  // r leaves room for direct labels, or for the right-hand % axis
-  const M = { t: 14, r: single ? (highRef ? 62 : 22) : 76, b: 30, l: 58 };
-  const ih = Math.min(Math.max(W * 0.34, 210), 340);
-  const H = ih + M.t + M.b;                                  // container includes the axis band
-  const iw = W - M.l - M.r;
+  const W = Math.max(host.clientWidth || 640, 280);
+  // A phone-width plot cannot afford the desktop gutters: 58 + 76 of margin
+  // leaves under 190px of actual chart on a 360px screen. Tighten both, and
+  // shrink the type with them so the labels still fit what is left.
+  const narrow = W < 520;
+  const fs = narrow ? 10 : 11;
+  const gut = narrow ? 6 : 9;                 // axis label offset from the plot
 
   const dates = live[0].dates;
   const n = Math.max(...live.map(s => s.values.length));
@@ -573,6 +672,21 @@ function lineChart(host, opts) {
   if (baseline100) { lo = Math.min(lo, 100); hi = Math.max(hi, 100); }
   const pad = (hi - lo) * 0.08 || Math.abs(hi * 0.01) || 1;
   lo -= pad; hi += pad;
+
+  // The left gutter has to hold the widest tick label, which is a property of
+  // the data, not the screen: "71.13" wants 44px, "25,123.50" wants 58. A
+  // fixed 40 clipped the futures; measuring keeps both honest.
+  const widest = Math.max(yFmt(lo).length, yFmt(hi).length);
+  const ml = narrow
+    ? Math.max(32, Math.min(54, Math.ceil(widest * fs * 0.58) + gut + 3))
+    : 58;
+  // r leaves room for direct labels, or for the right-hand % axis
+  const M = narrow
+    ? { t: 12, r: single ? (highRef ? 42 : 10) : 46, b: 26, l: ml }
+    : { t: 14, r: single ? (highRef ? 62 : 22) : 76, b: 30, l: ml };
+  const ih = Math.min(Math.max(W * 0.34, narrow ? 180 : 210), 340);
+  const H = ih + M.t + M.b;                                  // container includes the axis band
+  const iw = W - M.l - M.r;
 
   const X = (i) => M.l + (n > 1 ? (i / (n - 1)) * iw : iw / 2);
   const Y = (v) => M.t + ih - ((v - lo) / (hi - lo)) * ih;
@@ -586,7 +700,7 @@ function lineChart(host, opts) {
     ? Math.abs(new Date(last.includes("T") ? last : last + "T00:00:00")
              - new Date(first.includes("T") ? first : first + "T00:00:00")) / 864e5
     : 0;
-  const want = Math.min(6, n);
+  const want = Math.min(narrow ? 4 : 6, n);
   const xTickIdx = [];
   for (let k = 0; k < want; k++) xTickIdx.push(Math.round(k * (n - 1) / Math.max(want - 1, 1)));
 
@@ -594,7 +708,7 @@ function lineChart(host, opts) {
   P.push(`<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img">`);
 
   ticks.forEach(v => P.push(`<line x1="${M.l}" y1="${Y(v).toFixed(1)}" x2="${M.l + iw}" y2="${Y(v).toFixed(1)}" stroke="var(--gridline)" stroke-width="1"/>`));
-  ticks.forEach(v => P.push(`<text x="${M.l - 9}" y="${(Y(v) + 3.5).toFixed(1)}" text-anchor="end" font-size="11" fill="var(--text-muted)" style="font-variant-numeric:tabular-nums">${yFmt(v)}</text>`));
+  ticks.forEach(v => P.push(`<text x="${M.l - gut}" y="${(Y(v) + 3.5).toFixed(1)}" text-anchor="end" font-size="${fs}" fill="var(--text-muted)" style="font-variant-numeric:tabular-nums">${yFmt(v)}</text>`));
 
   if (baseline100)
     P.push(`<line x1="${M.l}" y1="${Y(100).toFixed(1)}" x2="${M.l + iw}" y2="${Y(100).toFixed(1)}" stroke="var(--baseline)" stroke-width="1"/>`);
@@ -603,8 +717,8 @@ function lineChart(host, opts) {
   // Not a second scale — every price maps to exactly one percentage.
   if (highRef) {
     ticks.forEach(v => P.push(
-      `<text x="${M.l + iw + 9}" y="${(Y(v) + 3.5).toFixed(1)}" text-anchor="start"
-         font-size="11" fill="var(--text-muted)"
+      `<text x="${M.l + iw + gut}" y="${(Y(v) + 3.5).toFixed(1)}" text-anchor="start"
+         font-size="${fs}" fill="var(--text-muted)"
          style="font-variant-numeric:tabular-nums">${fmtFromHigh(v, highRef)}</text>`));
     // the high itself is the 0% line
     P.push(`<line x1="${M.l}" y1="${Y(highRef).toFixed(1)}" x2="${M.l + iw}" y2="${Y(highRef).toFixed(1)}"
@@ -614,7 +728,7 @@ function lineChart(host, opts) {
   }
 
   P.push(`<line x1="${M.l}" y1="${M.t + ih}" x2="${M.l + iw}" y2="${M.t + ih}" stroke="var(--baseline)" stroke-width="1"/>`);
-  xTickIdx.forEach(i => { if (dates[i]) P.push(`<text x="${X(i).toFixed(1)}" y="${M.t + ih + 18}" text-anchor="middle" font-size="11" fill="var(--text-muted)">${esc(axisDate(dates[i], intraday, spanDays))}</text>`); });
+  xTickIdx.forEach(i => { if (dates[i]) P.push(`<text x="${X(i).toFixed(1)}" y="${M.t + ih + 18}" text-anchor="middle" font-size="${fs}" fill="var(--text-muted)">${esc(axisDate(dates[i], intraday, spanDays))}</text>`); });
 
   live.forEach(s => {
     const col = colorOf(s.symbol);
@@ -649,7 +763,7 @@ function lineChart(host, opts) {
     }).filter(Boolean).sort((a, b) => a.y - b.y);
     for (let i = 1; i < ends.length; i++)
       if (ends[i].y - ends[i - 1].y < 13) ends[i].y = ends[i - 1].y + 13;
-    ends.forEach(e => P.push(`<text x="${M.l + iw + 7}" y="${(e.y + 3.5).toFixed(1)}" font-size="11" font-weight="600" fill="${colorOf(e.symbol)}">${esc(e.symbol)}</text>`));
+    ends.forEach(e => P.push(`<text x="${M.l + iw + (narrow ? 5 : 7)}" y="${(e.y + 3.5).toFixed(1)}" font-size="${fs}" font-weight="600" fill="${colorOf(e.symbol)}">${esc(narrow ? e.symbol.slice(0, 6) : e.symbol)}</text>`));
   }
 
   P.push(`<g class="cross" style="display:none">
@@ -694,7 +808,11 @@ function lineChart(host, opts) {
   const hit = svg.querySelector(".hit");
   hit.addEventListener("mousemove", move);
   hit.addEventListener("mouseleave", leave);
-  hit.addEventListener("touchmove", (e) => { e.preventDefault(); move(e); }, { passive: false });
+  // touch-action:pan-y (CSS) already routes vertical swipes to the page, so
+  // these can stay passive. preventDefault() here used to pin the finger: on a
+  // phone the chart is most of the screen, and you could not scroll past it.
+  hit.addEventListener("touchstart", move, { passive: true });
+  hit.addEventListener("touchmove", move, { passive: true });
   hit.addEventListener("touchend", leave);
 }
 
@@ -934,8 +1052,15 @@ $("#theme").addEventListener("click", () => {
 const savedTheme = localStorage.getItem("ft.theme");
 if (savedTheme) document.documentElement.setAttribute("data-theme", savedTheme);
 
-let rt;
-addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => { renderDetail(); renderCompare(); }, 140); });
+let rt, lastW = innerWidth;
+addEventListener("resize", () => {
+  // Scrolling a phone hides the URL bar, which fires resize with the height
+  // changed and the width untouched. Only width changes the chart geometry,
+  // so ignore the rest instead of re-rendering both charts mid-scroll.
+  if (innerWidth === lastW) return;
+  lastW = innerWidth;
+  clearTimeout(rt); rt = setTimeout(() => { renderDetail(); renderCompare(); }, 140);
+});
 
 (async function init() {
   try {
