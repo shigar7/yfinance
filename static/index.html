@@ -218,6 +218,8 @@ svg .hit { touch-action: pan-y; }
 }
 .legend button:hover { background: var(--hover); }
 .legend button[aria-pressed="false"] { opacity: 0.4; }
+/* echoes the emphasised line on the chart */
+.legend button[data-sel="1"] { color: var(--text-primary); font-weight: 640; }
 .legend .swatch { width: 10px; height: 10px; }
 
 .hero { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 2px 0 14px; }
@@ -661,11 +663,16 @@ function renderQuotes() {
 /* ------------------------------------------------------- line chart core
    Shared by the detail chart (1 series) and the compare chart (n series). */
 function lineChart(host, opts) {
-  const { series, yFmt, tipFmt, baseline100, intraday, highRef } = opts;
+  const { series, yFmt, tipFmt, baseline100, intraday, highRef, emphasis } = opts;
   const live = series.filter(s => s.values.some(v => v != null) && !state.hidden.has(s.symbol));
   if (!live.length) { host.innerHTML = `<p class="loading">No data for this period.</p>`; return; }
 
   const single = live.length === 1;
+  // Emphasis only means something if the symbol is on the chart. Hiding the
+  // selected series from the legend would otherwise fade every line at once
+  // with nothing left standing out.
+  const emph = emphasis && live.some(s => s.symbol === emphasis) ? emphasis : null;
+  const faded = (sym) => emph !== null && sym !== emph;
   const W = Math.max(host.clientWidth || 640, 280);
   // A phone-width plot cannot afford the desktop gutters: 58 + 76 of margin
   // leaves under 190px of actual chart on a 360px screen. Tighten both, and
@@ -739,7 +746,12 @@ function lineChart(host, opts) {
   P.push(`<line x1="${M.l}" y1="${M.t + ih}" x2="${M.l + iw}" y2="${M.t + ih}" stroke="var(--baseline)" stroke-width="1"/>`);
   xTickIdx.forEach(i => { if (dates[i]) P.push(`<text x="${X(i).toFixed(1)}" y="${M.t + ih + 18}" text-anchor="middle" font-size="${fs}" fill="var(--text-muted)">${esc(axisDate(dates[i], intraday, spanDays))}</text>`); });
 
-  live.forEach(s => {
+  // Painter's order: the selected line goes last so it crosses over the others
+  // rather than under them. `live` keeps its own order — the crosshair dots are
+  // indexed against it.
+  const order = emph === null ? live
+    : [...live].sort((a, b) => (a.symbol === emph) - (b.symbol === emph));
+  order.forEach(s => {
     const col = colorOf(s.symbol);
     const segs = [];
     let cur = [];
@@ -759,7 +771,9 @@ function lineChart(host, opts) {
       const lastPt = segs[segs.length - 1];
       P.push(`<path d="${d}L${lastPt[lastPt.length - 1][0].toFixed(1)},${M.t + ih}L${pts[0][0].toFixed(1)},${M.t + ih}Z" fill="url(#${gid})" stroke="none"/>`);
     }
-    P.push(`<path d="${d}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`);
+    const dim = faded(s.symbol);
+    P.push(`<path d="${d}" fill="none" stroke="${col}" stroke-opacity="${dim ? 0.28 : 1}"
+      stroke-width="${dim ? 1.4 : emph !== null ? 2.4 : 2}" stroke-linejoin="round" stroke-linecap="round"/>`);
   });
 
   // Selective direct labels at the line ends — mandatory relief for the
@@ -772,7 +786,9 @@ function lineChart(host, opts) {
     }).filter(Boolean).sort((a, b) => a.y - b.y);
     for (let i = 1; i < ends.length; i++)
       if (ends[i].y - ends[i - 1].y < 13) ends[i].y = ends[i - 1].y + 13;
-    ends.forEach(e => P.push(`<text x="${M.l + iw + (narrow ? 5 : 7)}" y="${(e.y + 3.5).toFixed(1)}" font-size="${fs}" font-weight="600" fill="${colorOf(e.symbol)}">${esc(narrow ? e.symbol.slice(0, 6) : e.symbol)}</text>`));
+    ends.forEach(e => P.push(`<text x="${M.l + iw + (narrow ? 5 : 7)}" y="${(e.y + 3.5).toFixed(1)}"
+      font-size="${fs}" font-weight="${faded(e.symbol) ? 500 : 700}" fill="${colorOf(e.symbol)}"
+      fill-opacity="${faded(e.symbol) ? 0.5 : 1}">${esc(narrow ? e.symbol.slice(0, 6) : e.symbol)}</text>`));
   }
 
   P.push(`<g class="cross" style="display:none">
@@ -893,6 +909,7 @@ function renderCompare() {
   lineChart(host, {
     series: cmpSeries,
     baseline100: true,
+    emphasis: state.selected,
     yFmt: (v) => v.toFixed(0),
     tipFmt: (v) => `${v.toFixed(1)} (${v >= 100 ? "+" : ""}${(v - 100).toFixed(1)}%)`,
   });
@@ -900,7 +917,8 @@ function renderCompare() {
     const on = !state.hidden.has(s.symbol);
     const last = [...s.values].reverse().find(v => v != null);
     const chg = last == null ? null : last - 100;
-    return `<button data-leg="${esc(s.symbol)}" aria-pressed="${on}">
+    return `<button data-leg="${esc(s.symbol)}" aria-pressed="${on}"
+      ${s.symbol === state.selected ? 'data-sel="1"' : ""}>
       <span class="swatch" style="background:${colorOf(s.symbol)}"></span>
       <span>${esc(s.symbol)}</span>
       <span class="${dirClass(chg)}" style="font-variant-numeric:tabular-nums">${fmtPct(chg)}</span>
