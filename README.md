@@ -33,8 +33,11 @@ avoids both problems.
 ## Tabs
 
 Lists live in `watchlist.json` and are editable from the page: **+ New list** to
-add, and on the active tab `‹ ›` to reorder, `✎` to rename, `×` to delete.
-Symbols reorder with the `▲▼` arrows on each row.
+add, and `×` on the active tab to delete. Symbols reorder within a list with the
+`▲▼` arrows on each row.
+
+Renaming and reordering *tabs* are not in the UI, but the endpoints are still
+there if you want them (`PATCH /api/lists/{id}` and `POST /api/lists/{id}/move`).
 
 Use Yahoo's suffixes — `.AX` for ASX, `=F` for futures, `^` for indices. Some
 bare tickers resolve to something you did not mean: `QAU` is a US fund, while
@@ -63,6 +66,11 @@ during ASX hours. `fetch_quote()` reads the live price from `fast_info` and
 series of different lengths would misalign if charted by array position. The
 compare endpoint reindexes every series onto the union of dates and
 forward-fills — `align()` in `app.py`.
+
+**Quotes are fetched in parallel.** Each quote costs roughly three Yahoo round
+trips, so a seven-symbol tab is twenty-one requests. They go through a thread
+pool (`cached_many()`), which makes a cold tab load roughly flat with symbol
+count rather than linear.
 
 **Colour is pinned per symbol, not per row.** `ensure_slots()` assigns each
 symbol a stable colour slot that survives reordering and deletion, so removing

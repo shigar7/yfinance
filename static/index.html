@@ -114,11 +114,6 @@ button[aria-pressed="true"] { background: var(--text-primary); color: var(--surf
 .tab-act.danger:hover { color: var(--down); }
 .tab-new { color: var(--text-muted); border: none; background: none; padding: 8px 10px; }
 .tab-new:hover { background: var(--hover); color: var(--text-primary); }
-.tab-edit {
-  font: inherit; font-weight: 620; width: 130px; padding: 4px 7px;
-  border: 1px solid var(--series-1); border-radius: 6px;
-  background: var(--page); color: var(--text-primary);
-}
 
 /* one filter row above everything it scopes */
 .filters {
@@ -157,14 +152,20 @@ td.num { font-variant-numeric: tabular-nums; }
 .nm { color: var(--text-muted); font-size: 12px; font-weight: 400; margin-left: 8px; }
 .ccy { color: var(--text-muted); font-size: 11px; }
 .up { color: var(--up); } .down { color: var(--down); }
-.move { display: inline-flex; flex-direction: column; gap: 1px; vertical-align: middle; }
+/* Reorder arrows: >=24px hit targets. Anything smaller and the click lands
+   on the row instead, which just reselects the chart. */
+.move { display: inline-flex; flex-direction: column; gap: 2px; vertical-align: middle; }
 .move button {
+  display: inline-flex; align-items: center; justify-content: center;
   border: none; background: none; color: var(--text-muted);
-  padding: 0 4px; font-size: 9px; line-height: 9px; border-radius: 3px;
+  width: 26px; height: 24px; padding: 0;
+  font-size: 11px; line-height: 1; border-radius: 6px;
 }
 .move button:hover:not(:disabled) { color: var(--text-primary); background: var(--hover); }
-.move button:disabled { opacity: 0.25; cursor: default; }
-td.move-cell { padding-left: 0; padding-right: 0; width: 22px; }
+.move button:active:not(:disabled) { background: var(--gridline); }
+.move button:disabled { opacity: 0.22; cursor: default; }
+td.move-cell { padding-left: 0; padding-right: 0; width: 30px; }
+tbody tr:hover .move button:not(:disabled) { color: var(--text-secondary); }
 
 .del {
   border: none; background: none; color: var(--text-muted);
@@ -331,7 +332,6 @@ const state = {
   selected: null,
   hidden: new Set(),    // legend toggles — must never repaint survivors
   tableView: false,
-  renaming: null,       // id of the tab being renamed inline
 };
 
 const activeList = () => state.lists.find(l => l.id === state.activeId) || state.lists[0] || null;
@@ -426,18 +426,9 @@ function renderTabs() {
   const host = $("#tabs");
   host.innerHTML = state.lists.map(l => {
     const on = l.id === state.activeId;
-    if (state.renaming === l.id)
-      return `<input class="tab-edit" data-edit="${esc(l.id)}" value="${esc(l.name)}"
-                     maxlength="40" spellcheck="false" aria-label="Rename list">`;
     return `<button class="tab" role="tab" data-tab="${esc(l.id)}" aria-selected="${on}">
       <span>${esc(l.name)}</span>
       <span class="count">${l.symbols.length}</span>
-      ${on && state.lists.length > 1 ? `<span class="tab-act" data-tabmove="${esc(l.id)}" data-delta="-1" role="button" tabindex="0"
-                    title="Move ${esc(l.name)} left" aria-label="Move ${esc(l.name)} left">&#8249;</span>` : ""}
-      ${on && state.lists.length > 1 ? `<span class="tab-act" data-tabmove="${esc(l.id)}" data-delta="1" role="button" tabindex="0"
-                    title="Move ${esc(l.name)} right" aria-label="Move ${esc(l.name)} right">&#8250;</span>` : ""}
-      ${on ? `<span class="tab-act" data-rename="${esc(l.id)}" role="button" tabindex="0"
-                    title="Rename ${esc(l.name)}" aria-label="Rename ${esc(l.name)}">&#9998;</span>` : ""}
       ${on && state.lists.length > 1 ? `<span class="tab-act danger" data-drop="${esc(l.id)}" role="button" tabindex="0"
                     title="Delete ${esc(l.name)}" aria-label="Delete ${esc(l.name)}">&times;</span>` : ""}
     </button>`;
@@ -445,46 +436,15 @@ function renderTabs() {
 
   host.querySelectorAll("[data-tab]").forEach(b =>
     b.addEventListener("click", (e) => {
-      if (e.target.closest("[data-rename],[data-drop],[data-tabmove]")) return;
+      if (e.target.closest("[data-drop]")) return;
       switchTab(b.dataset.tab);
     }));
 
-  host.querySelectorAll("[data-rename]").forEach(el => {
-    const go = (e) => { e.stopPropagation(); state.renaming = el.dataset.rename; renderTabs(); };
-    el.addEventListener("click", go);
-    el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") go(e); });
-  });
-  host.querySelectorAll("[data-tabmove]").forEach(el => {
-    const go = (e) => { e.stopPropagation(); moveTab(el.dataset.tabmove, Number(el.dataset.delta)); };
-    el.addEventListener("click", go);
-    el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") go(e); });
-  });
   host.querySelectorAll("[data-drop]").forEach(el => {
     const go = (e) => { e.stopPropagation(); deleteTab(el.dataset.drop); };
     el.addEventListener("click", go);
     el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") go(e); });
   });
-
-  const edit = host.querySelector("[data-edit]");
-  if (edit) {
-    edit.focus(); edit.select();
-    const commit = async () => {
-      const id = edit.dataset.edit, name = edit.value.trim();
-      const prev = state.lists.find(l => l.id === id);
-      state.renaming = null;
-      if (!name || !prev || name === prev.name) { renderTabs(); return; }
-      await api(`/api/lists/${id}`, {
-        method: "PATCH", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name }),
-      }).then(d => { state.lists = d.lists; }).catch(() => {});
-      renderTabs();
-    };
-    edit.addEventListener("blur", commit);
-    edit.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") { e.preventDefault(); edit.blur(); }
-      if (e.key === "Escape") { state.renaming = null; renderTabs(); }
-    });
-  }
 
   $("#tab-new").addEventListener("click", newTab);
   const l = activeList();
@@ -494,12 +454,20 @@ function renderTabs() {
 async function switchTab(id) {
   if (id === state.activeId) return;
   state.activeId = id;
-  state.selected = null;
   state.hidden.clear();
   localStorage.setItem("ft.list", id);
+
+  // Seed from the list we already hold so the two requests can run together
+  // instead of history waiting on quotes.
+  const list = activeList();
+  state.symbols = list ? list.symbols.slice() : [];
+  state.slots = (list && list.slots) || {};
+  state.selected = state.symbols[0] || null;
+  state.quotes = [];
+
   renderTabs();
-  await loadQuotes();
-  await loadHistory();
+  $("#quotes").innerHTML = `<p class="loading">Loading ${esc(list ? list.name : "")}…</p>`;
+  await Promise.all([loadQuotes(), loadHistory()]);
 }
 
 async function newTab() {
@@ -549,7 +517,7 @@ function renderQuotes() {
       <td class="num ${dirClass(q.monthPct)}">${fmtPct(q.monthPct)}</td>
       <td class="meter-cell">${meter(q)}</td>
       <td class="chart-cell hide-sm">${inlineChart(q.spark, yearUp)}</td>
-      <td class="move-cell"><span class="move">
+      <td class="move-cell"><span class="move" data-move-group>
         <button data-move="${esc(q.symbol)}" data-delta="-1" ${i === 0 ? "disabled" : ""}
                 title="Move ${esc(q.symbol)} up" aria-label="Move ${esc(q.symbol)} up">&#9650;</button>
         <button data-move="${esc(q.symbol)}" data-delta="1" ${last ? "disabled" : ""}
@@ -568,7 +536,7 @@ function renderQuotes() {
     <tbody>${rows}</tbody></table>`;
 
   host.querySelectorAll("tbody tr").forEach(tr => {
-    const pick = (e) => { if (e.target.closest("[data-del],[data-move]")) return; select(tr.dataset.sym); };
+    const pick = (e) => { if (e.target.closest("[data-del],[data-move],[data-move-group]")) return; select(tr.dataset.sym); };
     tr.addEventListener("click", pick);
     tr.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(e); }
@@ -809,7 +777,9 @@ async function loadQuotes() {
   state.quotes = d.quotes;
   state.slots = d.slots || {};
   state.symbols = d.quotes.map(q => q.symbol);
-  if (!state.selected || !state.symbols.includes(state.selected)) state.selected = state.symbols[0] || null;
+  if (!state.selected || !state.symbols.includes(state.selected)) {
+    state.selected = state.symbols[0] || null;
+  }
   $("#asof").textContent = "as of " + d.asOf;
   const l = activeList();
   if (l) l.symbols = state.symbols;   // keep the tab count honest
@@ -851,26 +821,23 @@ function select(sym) {
 }
 
 async function moveSymbol(sym, delta) {
-  const d = await api(`/api/lists/${state.activeId}/symbols/${encodeURIComponent(sym)}/move`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ delta }),
-  });
-  state.lists = d.lists;
-  const list = activeList();
-  // reorder in place — no refetch, the quotes themselves have not changed
-  state.symbols = list.symbols.slice();
-  state.quotes.sort((a, b) => state.symbols.indexOf(a.symbol) - state.symbols.indexOf(b.symbol));
-  renderQuotes();
-  renderCompare();
-}
-
-async function moveTab(id, delta) {
-  const d = await api(`/api/lists/${id}/move`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ delta }),
-  });
-  state.lists = d.lists;
-  renderTabs();
+  try {
+    const d = await api(`/api/lists/${state.activeId}/symbols/${encodeURIComponent(sym)}/move`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ delta }),
+    });
+    state.lists = d.lists;
+    const list = activeList();
+    // reorder in place — no refetch, the quotes themselves have not changed
+    state.symbols = list.symbols.slice();
+    state.quotes.sort((a, b) => state.symbols.indexOf(a.symbol) - state.symbols.indexOf(b.symbol));
+    renderQuotes();
+    renderCompare();
+  } catch (e) {
+    const msg = $("#addmsg");
+    msg.className = "msg err";
+    msg.textContent = `Could not move ${sym}: ${e.message}`;
+  }
 }
 
 async function removeSymbol(sym) {
@@ -942,7 +909,14 @@ let rt;
 addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => { renderDetail(); renderCompare(); }, 140); });
 
 (async function init() {
-  try { await loadLists(); await loadQuotes(); await loadHistory(); }
+  try {
+    await loadLists();
+    const list = activeList();
+    state.symbols = list ? list.symbols.slice() : [];
+    state.slots = (list && list.slots) || {};
+    state.selected = state.symbols[0] || null;
+    await Promise.all([loadQuotes(), loadHistory()]);
+  }
   catch (e) { $("#quotes").innerHTML = `<p class="loading">Could not load: ${esc(e.message)}</p>`; }
 })();
 </script>

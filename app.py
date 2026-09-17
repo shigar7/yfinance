@@ -9,6 +9,7 @@ import json
 import math
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from uuid import uuid4
 
@@ -56,6 +57,10 @@ INTRADAY = {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h"}
 # Coarser fallbacks to try when Yahoo returns nothing for a fine interval.
 FALLBACK = {"1m": "5m", "5m": "30m", "30m": "1h", "1h": "1d", "1d": "1wk", "1wk": "1mo"}
 
+# Each quote costs ~3 Yahoo round trips (history, fast_info, info), so a
+# 7-symbol tab is 21 sequential requests if fetched in a loop. Fan them out.
+POOL = ThreadPoolExecutor(max_workers=12, thread_name_prefix="yf")
+
 QUOTE_TTL = 60      # seconds
 HISTORY_TTL = 600   # seconds
 
@@ -79,6 +84,17 @@ def cached(key: str, ttl: int, produce):
     with _lock:
         _cache[key] = (now, value)
     return value
+
+
+def cached_many(items: list, key: str, ttl: int, produce) -> list:
+    """cached() over a batch, resolved in parallel. `key` is a format string
+    applied to each item; cache hits return without touching the pool."""
+    if not items:
+        return []
+    work = lambda item: cached(key.format(item), ttl, lambda: produce(item))
+    if len(items) == 1:
+        return [work(items[0])]
+    return list(POOL.map(work, items))
 
 
 def invalidate(prefix: str = "") -> None:
@@ -488,7 +504,7 @@ def remove_symbol(list_id: str, symbol: str):
 def quotes(list_id: str | None = None):
     lists = load_lists()
     entry = find_list(lists, list_id) if list_id else lists[0]
-    rows = [cached(f"q:{s}", QUOTE_TTL, lambda s=s: fetch_quote(s)) for s in entry["symbols"]]
+    rows = cached_many(entry["symbols"], "q:{}", QUOTE_TTL, fetch_quote)
     return {"listId": entry["id"], "name": entry["name"], "quotes": rows,
             "slots": entry.get("slots", {}), "asOf": time.strftime("%Y-%m-%d %H:%M:%S")}
 
@@ -500,9 +516,8 @@ def history(symbols: str, period: str = "1Y", granular: bool = False):
         raise HTTPException(400, f"period must be one of {', '.join(PERIODS)}")
     wanted = [s.strip() for s in (symbols or "").split(",") if s.strip()]
     ttl = 90 if granular and DETAIL_PERIODS[period][1] in INTRADAY else HISTORY_TTL
-    series = [cached(f"h:{s}:{period}:{granular}", ttl,
-                     lambda s=s: fetch_history(s, period, granular))
-              for s in wanted]
+    series = cached_many(wanted, "h:{}:" + f"{period}:{granular}", ttl,
+                         lambda s: fetch_history(s, period, granular))
     if not granular:
         series = align(series)
     return {"period": period, "series": series}
