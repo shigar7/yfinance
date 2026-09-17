@@ -554,13 +554,14 @@ function renderQuotes() {
 /* ------------------------------------------------------- line chart core
    Shared by the detail chart (1 series) and the compare chart (n series). */
 function lineChart(host, opts) {
-  const { series, yFmt, tipFmt, baseline100, intraday } = opts;
+  const { series, yFmt, tipFmt, baseline100, intraday, highRef } = opts;
   const live = series.filter(s => s.values.some(v => v != null) && !state.hidden.has(s.symbol));
   if (!live.length) { host.innerHTML = `<p class="loading">No data for this period.</p>`; return; }
 
   const single = live.length === 1;
   const W = Math.max(host.clientWidth || 640, 320);
-  const M = { t: 14, r: single ? 22 : 76, b: 30, l: 58 };   // r leaves room for direct labels
+  // r leaves room for direct labels, or for the right-hand % axis
+  const M = { t: 14, r: single ? (highRef ? 62 : 22) : 76, b: 30, l: 58 };
   const ih = Math.min(Math.max(W * 0.34, 210), 340);
   const H = ih + M.t + M.b;                                  // container includes the axis band
   const iw = W - M.l - M.r;
@@ -597,6 +598,20 @@ function lineChart(host, opts) {
 
   if (baseline100)
     P.push(`<line x1="${M.l}" y1="${Y(100).toFixed(1)}" x2="${M.l + iw}" y2="${Y(100).toFixed(1)}" stroke="var(--baseline)" stroke-width="1"/>`);
+
+  // Right axis: the same gridlines, relabelled as % below the period high.
+  // Not a second scale — every price maps to exactly one percentage.
+  if (highRef) {
+    ticks.forEach(v => P.push(
+      `<text x="${M.l + iw + 9}" y="${(Y(v) + 3.5).toFixed(1)}" text-anchor="start"
+         font-size="11" fill="var(--text-muted)"
+         style="font-variant-numeric:tabular-nums">${fmtFromHigh(v, highRef)}</text>`));
+    // the high itself is the 0% line
+    P.push(`<line x1="${M.l}" y1="${Y(highRef).toFixed(1)}" x2="${M.l + iw}" y2="${Y(highRef).toFixed(1)}"
+        stroke="var(--baseline)" stroke-width="1"/>`);
+    P.push(`<text x="${M.l + 5}" y="${(Y(highRef) - 5).toFixed(1)}" font-size="10.5"
+        fill="var(--text-muted)" style="font-variant-numeric:tabular-nums">high ${yFmt(highRef)}</text>`);
+  }
 
   P.push(`<line x1="${M.l}" y1="${M.t + ih}" x2="${M.l + iw}" y2="${M.t + ih}" stroke="var(--baseline)" stroke-width="1"/>`);
   xTickIdx.forEach(i => { if (dates[i]) P.push(`<text x="${X(i).toFixed(1)}" y="${M.t + ih + 18}" text-anchor="middle" font-size="11" fill="var(--text-muted)">${esc(axisDate(dates[i], intraday, spanDays))}</text>`); });
@@ -683,10 +698,16 @@ function lineChart(host, opts) {
   hit.addEventListener("touchend", leave);
 }
 
+function fmtFromHigh(v, high) {
+  if (!high) return "";
+  const pct = (v / high - 1) * 100;
+  return (pct >= 0 ? "+" : "") + pct.toFixed(1) + "%";
+}
+
 function niceStep(raw) {
   const p = Math.pow(10, Math.floor(Math.log10(Math.abs(raw) || 1)));
   const n = raw / p;
-  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p;
+  return (n < 1.5 ? 1 : n < 3 ? 2 : n < 7 ? 5 : 10) * p;
 }
 
 /* --------------------------------------------------------- table views */
@@ -707,13 +728,18 @@ function renderDetail() {
   const host = $("#detail-host"), q = state.quotes.find(x => x.symbol === state.selected);
   $("#detail-title").innerHTML = esc(state.selected || "—") +
     (detailMeta.interval ? `<span class="interval-tag">${esc(detailMeta.interval)} bars</span>` : "");
-  $("#detail-sub").textContent = q && q.name !== q.symbol
-    ? `${q.name} · ${q.currency || ""} · ${state.period}`
-    : `${state.period}`;
+  const dvals = detailSeries.length ? detailSeries[0].values.filter(v => v != null) : [];
+  const periodHigh = dvals.length ? Math.max(...dvals) : null;
+  const who = q && q.name !== q.symbol ? `${q.name} · ${q.currency || ""} · ` : "";
+  $("#detail-sub").textContent = periodHigh
+    ? `${who}${state.period} — left axis price, right axis % below the ${state.period} high of ${fmtPrice(periodHigh)}`
+    : `${who}${state.period}`;
 
+  const fromHigh = q && q.price != null && periodHigh ? (q.price / periodHigh - 1) * 100 : null;
   $("#detail-hero").innerHTML = q ? `
     <span class="figure">${fmtPrice(q.price)}</span>
     <span class="delta ${dirClass(q.changePct)}">${fmtChg(q.change)} (${fmtPct(q.changePct)})</span>
+    ${fromHigh != null ? `<span class="delta ${dirClass(fromHigh)}">${fmtPct(fromHigh)} from ${esc(state.period)} high</span>` : ""}
     <span class="meta">${esc(q.currency || "")} · prev close ${fmtPrice(q.prevClose)}</span>` : "";
 
   if (!detailSeries.length) {
@@ -721,11 +747,14 @@ function renderDetail() {
     $("#detail-table").classList.add("hidden");
     return;
   }
+  const vals = detailSeries[0].values.filter(v => v != null);
+  const high = vals.length ? Math.max(...vals) : null;
   lineChart(host, {
     series: detailSeries,
     intraday: detailMeta.intraday,
+    highRef: high,
     yFmt: fmtPrice,
-    tipFmt: (v) => fmtPrice(v),
+    tipFmt: (v) => `${fmtPrice(v)}  <span style="color:var(--text-muted)">${fmtFromHigh(v, high)}</span>`,
   });
   $("#detail-table").innerHTML = state.tableView ? dataTable(detailSeries, [state.selected + " close"], fmtPrice) : "";
   $("#detail-table").classList.toggle("hidden", !state.tableView);
@@ -816,8 +845,8 @@ async function loadHistory() {
 function select(sym) {
   state.selected = sym;
   renderQuotes();
-  $("#detail-host").scrollIntoView({ behavior: "smooth", block: "nearest" });
   loadHistory();
+  try { $("#detail-host").scrollIntoView({ behavior: "smooth", block: "nearest" }); } catch (e) {}
 }
 
 async function moveSymbol(sym, delta) {

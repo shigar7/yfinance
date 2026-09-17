@@ -52,14 +52,16 @@
         "SPCX",
         "AMD",
         "TEAM",
-        "CRM"
+        "CRM",
+        "NVDA"
       ],
       "slots": {
         "PLTR": 0,
         "SPCX": 1,
         "AMD": 2,
         "TEAM": 3,
-        "CRM": 4
+        "CRM": 4,
+        "NVDA": 5
       }
     },
     {
@@ -78,9 +80,9 @@
       "id": "7715d31f",
       "name": "AUS",
       "symbols": [
+        "IVV.AX",
         "VGB.AX",
         "IOZ.AX",
-        "IVV.AX",
         "VGS.AX",
         "VHY.AX",
         "IEU.AX",

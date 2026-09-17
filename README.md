@@ -89,6 +89,13 @@ the window, stepping down automatically when Yahoo refuses:
 | 3M–1Y | 1h | 730 days |
 | 5Y / MAX | 1d / 1wk | — |
 
+The detail chart carries a second y-axis on the right showing each price as a
+percentage of the period high (`price / high - 1`). This is not a dual-axis
+chart: it is the same scale relabelled, so the gridlines are shared and every
+price maps to exactly one percentage. The high is taken from the series actually
+plotted, which uses intraday bars for most periods — so it can differ by a few
+cents from the 52-week high in the table, which uses daily closes.
+
 The relative-performance chart indexes every series to 100 at the period start,
 so AUD and USD instruments compare on one axis. A dual-axis chart of raw prices
 would invent correlations that are not in the data.
