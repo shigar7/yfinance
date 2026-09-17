@@ -1,0 +1,100 @@
+{
+  "lists": [
+    {
+      "id": "1ef3d544",
+      "name": "Main",
+      "symbols": [
+        "ES=F",
+        "CL=F",
+        "IVV.AX",
+        "VAS.AX",
+        "VGB.AX"
+      ],
+      "slots": {
+        "ES=F": 0,
+        "CL=F": 1,
+        "IVV.AX": 2,
+        "VAS.AX": 3,
+        "VGB.AX": 4
+      }
+    },
+    {
+      "id": "18f20405",
+      "name": "Commods",
+      "symbols": [
+        "CL=F",
+        "QAU.AX"
+      ],
+      "slots": {
+        "CL=F": 0,
+        "QAU.AX": 1
+      }
+    },
+    {
+      "id": "d358b19d",
+      "name": "US",
+      "symbols": [
+        "ES=F",
+        "NQ=F",
+        "IVV.AX"
+      ],
+      "slots": {
+        "ES=F": 0,
+        "NQ=F": 1,
+        "IVV.AX": 2
+      }
+    },
+    {
+      "id": "d07e5250",
+      "name": "US_TECH",
+      "symbols": [
+        "PLTR",
+        "SPCX",
+        "AMD",
+        "TEAM",
+        "CRM"
+      ],
+      "slots": {
+        "PLTR": 0,
+        "SPCX": 1,
+        "AMD": 2,
+        "TEAM": 3,
+        "CRM": 4
+      }
+    },
+    {
+      "id": "e2637c3d",
+      "name": "Rates",
+      "symbols": [
+        "^TNX",
+        "VGB.AX"
+      ],
+      "slots": {
+        "^TNX": 0,
+        "VGB.AX": 1
+      }
+    },
+    {
+      "id": "7715d31f",
+      "name": "AUS",
+      "symbols": [
+        "VGB.AX",
+        "IOZ.AX",
+        "IVV.AX",
+        "VGS.AX",
+        "VHY.AX",
+        "IEU.AX",
+        "VAE.AX"
+      ],
+      "slots": {
+        "VGB.AX": 0,
+        "IOZ.AX": 1,
+        "IVV.AX": 2,
+        "VGS.AX": 3,
+        "VHY.AX": 4,
+        "IEU.AX": 5,
+        "VAE.AX": 6
+      }
+    }
+  ]
+}
