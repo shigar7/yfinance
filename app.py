@@ -17,6 +17,7 @@ import pandas as pd
 import yfinance as yf
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 ROOT = Path(__file__).parent
@@ -532,3 +533,15 @@ def refresh():
 @app.get("/")
 def index():
     return FileResponse(STATIC / "index.html")
+
+
+@app.get("/sw.js")
+def service_worker():
+    """Served from the root, not /static, so its scope covers the whole origin.
+    Chrome requires a registered worker before it will offer to install the app."""
+    return FileResponse(STATIC / "sw.js", media_type="text/javascript",
+                        headers={"Cache-Control": "no-cache"})
+
+
+# icons + manifest; mounted last so it cannot shadow an API route
+app.mount("/static", StaticFiles(directory=STATIC), name="static")

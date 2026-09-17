@@ -4,6 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Stonks Tracker</title>
+<link rel="manifest" href="/static/manifest.webmanifest">
+<link rel="icon" href="/static/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<meta name="theme-color" content="#f9f9f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
+<!-- iOS ignores the manifest's display mode; these are how it opens chrome-less -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Stonks">
 <style>
 :root {
   color-scheme: light;
@@ -1061,6 +1070,12 @@ addEventListener("resize", () => {
   lastW = innerWidth;
   clearTimeout(rt); rt = setTimeout(() => { renderDetail(); renderCompare(); }, 140);
 });
+
+/* Chrome only offers "Install app" on a secure origin, so over plain http on
+   the LAN this is a no-op and you get a plain home-screen shortcut instead.
+   Put the app behind HTTPS and the same page becomes installable, unchanged. */
+if ("serviceWorker" in navigator && isSecureContext)
+  navigator.serviceWorker.register("/sw.js").catch(() => {});
 
 (async function init() {
   try {
