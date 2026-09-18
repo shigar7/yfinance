@@ -86,8 +86,12 @@ the window, stepping down automatically when Yahoo refuses:
 | 1D | 1m | 7 days |
 | 5D | 5m | 60 days |
 | 1M | 30m | 60 days |
-| 3M–1Y | 1h | 730 days |
-| 5Y / MAX | 1d / 1wk | — |
+| 6M–1Y | 1h | 730 days |
+| 3Y / 5Y | 1d | — |
+| MAX | 1wk | — |
+
+`3Y` is the one window Yahoo has no period string for — its vocabulary goes
+`2y` then `5y` — so it is fetched by start date instead (`raw_history()`).
 
 The detail chart carries a second y-axis on the right showing each price as a
 percentage of the period high (`price / high - 1`). This is not a dual-axis
@@ -117,7 +121,7 @@ would invent correlations that are not in the data.
 | `GET /api/history?symbols=A&period=1Y&granular=true` | finest-interval series |
 | `POST /api/refresh` | drop all caches |
 
-Periods: `1D 5D 1M 3M 6M YTD 1Y 5Y MAX`.
+Periods: `1D 5D 1M 6M YTD 1Y 3Y 5Y MAX`.
 
 ## Note on `watchlist.json`
 

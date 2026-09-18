@@ -32,10 +32,10 @@ PERIODS = {
     "1D":  ("5d", "1d"),
     "5D":  ("1mo", "1d"),
     "1M":  ("1mo", "1d"),
-    "3M":  ("3mo", "1d"),
     "6M":  ("6mo", "1d"),
     "YTD": ("ytd", "1d"),
     "1Y":  ("1y", "1d"),
+    "3Y":  ("3y", "1d"),
     "5Y":  ("5y", "1wk"),
     "MAX": ("max", "1mo"),
 }
@@ -46,14 +46,18 @@ DETAIL_PERIODS = {
     "1D":  ("1d", "1m"),
     "5D":  ("5d", "5m"),
     "1M":  ("1mo", "30m"),
-    "3M":  ("3mo", "1h"),
     "6M":  ("6mo", "1h"),
     "YTD": ("ytd", "1h"),
     "1Y":  ("1y", "1h"),
+    "3Y":  ("3y", "1d"),
     "5Y":  ("5y", "1d"),
     "MAX": ("max", "1wk"),
 }
 INTRADAY = {"1m", "2m", "5m", "15m", "30m", "60m", "90m", "1h"}
+
+# Yahoo's period vocabulary jumps straight from 2y to 5y, so the windows it
+# has no word for are fetched by start date instead.
+WINDOW_DAYS = {"3y": 365 * 3}
 
 # Coarser fallbacks to try when Yahoo returns nothing for a fine interval.
 FALLBACK = {"1m": "5m", "5m": "30m", "30m": "1h", "1h": "1d", "1d": "1wk", "1wk": "1mo"}
@@ -229,6 +233,17 @@ def clean(x) -> float | None:
     return None if math.isnan(f) or math.isinf(f) else f
 
 
+def raw_history(symbol: str, period: str, interval: str) -> pd.DataFrame:
+    """history() by period, falling back to a start date for the windows that
+    are not in Yahoo's period vocabulary."""
+    tk = yf.Ticker(symbol)
+    days = WINDOW_DAYS.get(period)
+    if days is None:
+        return tk.history(period=period, interval=interval)
+    start = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)).date()
+    return tk.history(start=start.isoformat(), interval=interval)
+
+
 def close_series(hist: pd.DataFrame) -> pd.Series:
     if hist is None or hist.empty or "Close" not in hist:
         return pd.Series(dtype="float64")
@@ -346,7 +361,7 @@ def fetch_history(symbol: str, period: str, granular: bool = False) -> dict:
         # Yahoo returns an empty frame when a fine interval exceeds its window;
         # step down until something comes back.
         for _ in range(4):
-            hist = yf.Ticker(symbol).history(period=yf_period, interval=tried)
+            hist = raw_history(symbol, yf_period, tried)
             closes = close_series(hist)
             if len(closes) > 1:
                 break

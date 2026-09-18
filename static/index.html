@@ -124,10 +124,11 @@ button[aria-pressed="true"] { background: var(--text-primary); color: var(--surf
 .tab-new { color: var(--text-muted); border: none; background: none; padding: 8px 10px; }
 .tab-new:hover { background: var(--hover); color: var(--text-primary); }
 
-/* one filter row above everything it scopes */
+/* one filter row above the charts it scopes — the card above supplies the
+   gap, so this only needs its own bottom margin */
 .filters {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  padding: 14px 0 18px; margin-bottom: 20px;
+  padding: 0; margin: 0 0 18px;
 }
 .filters .label { color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; margin-right: 2px; }
 .seg { display: inline-flex; background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
@@ -229,7 +230,6 @@ svg .hit { touch-action: pan-y; }
 
 .loading { color: var(--text-muted); font-size: 13px; padding: 26px 0; }
 .dim { opacity: 0.45; transition: opacity .15s; }
-.hidden { display: none; }
 .note { color: var(--text-muted); font-size: 11.5px; margin-top: 12px; }
 
 /* 52-week meter — one hue, light track / dark fill (sequential ramp) */
@@ -285,11 +285,10 @@ td.chart-cell { padding-right: 2px; }
 
   /* Period: nine buttons in nine equal columns, full width. A horizontal
      scroller would hide half the periods off the right edge. */
-  .filters { gap: 10px; padding: 12px 0 14px; margin-bottom: 14px; }
-  .filters .label, .filters .spacer { display: none; }
+  .filters { gap: 10px; padding: 0; margin: 0 0 14px; }
+  .filters .label { display: none; }
   .seg { display: grid; grid-template-columns: repeat(9, 1fr); width: 100%; }
   .seg button { padding: 9px 2px; font-size: 12px; text-align: center; }
-  #tableview { width: 100%; padding: 9px; }
 
   /* Quote rows as cards. thead is dropped, so the one cell whose meaning
      isn't positional (1M) labels itself. */
@@ -377,13 +376,6 @@ td.chart-cell { padding-right: 2px; }
 
 <nav class="tabs" id="tabs" role="tablist" aria-label="Watchlists"></nav>
 
-<div class="filters">
-  <span class="label">Period</span>
-  <div class="seg" id="periods"></div>
-  <span class="spacer"></span>
-  <button id="tableview" aria-pressed="false">Table view</button>
-</div>
-
 <section class="card">
   <div class="card-head">
     <div>
@@ -399,6 +391,13 @@ td.chart-cell { padding-right: 2px; }
   </div>
 </section>
 
+<!-- sits directly above the two charts it scopes; the table above is always
+     a 1-year window and never listened to this -->
+<div class="filters">
+  <span class="label">Period</span>
+  <div class="seg" id="periods"></div>
+</div>
+
 <section class="card">
   <div class="card-head">
     <div>
@@ -408,7 +407,6 @@ td.chart-cell { padding-right: 2px; }
   </div>
   <div class="hero" id="detail-hero"></div>
   <div class="chart-host" id="detail-host"><p class="loading">Loading…</p></div>
-  <div id="detail-table" class="hidden"></div>
 </section>
 
 <section class="card">
@@ -421,7 +419,6 @@ td.chart-cell { padding-right: 2px; }
   </div>
   <div class="chart-host" id="cmp-host"><p class="loading">Loading…</p></div>
   <div class="legend" id="cmp-legend"></div>
-  <div id="cmp-table" class="hidden"></div>
   <p class="note">Indexed series show percentage change from the period start — not price.
     Absolute prices stay in the watchlist above, each in its own currency.</p>
 </section>
@@ -430,9 +427,11 @@ td.chart-cell { padding-right: 2px; }
 
 <script>
 /* ---------------------------------------------------------------- state */
-const PERIODS = ["1D", "5D", "1M", "3M", "6M", "YTD", "1Y", "5Y", "MAX"];
+const PERIODS = ["1D", "5D", "1M", "6M", "YTD", "1Y", "3Y", "5Y", "MAX"];
+const savedPeriod = localStorage.getItem("ft.period");
 const state = {
-  period: localStorage.getItem("ft.period") || "1Y",
+  // a period that has since been removed can still be sitting in storage
+  period: PERIODS.includes(savedPeriod) ? savedPeriod : "1Y",
   lists: [],            // [{id, name, symbols}] — the tabs
   activeId: localStorage.getItem("ft.list") || null,
   symbols: [],          // active list's order — drives colour assignment
@@ -440,7 +439,6 @@ const state = {
   slots: {},            // symbol -> pinned colour slot
   selected: null,
   hidden: new Set(),    // legend toggles — must never repaint survivors
-  tableView: false,
 };
 
 const activeList = () => state.lists.find(l => l.id === state.activeId) || state.lists[0] || null;
@@ -853,17 +851,6 @@ function niceStep(raw) {
   return (n < 1.5 ? 1 : n < 3 ? 2 : n < 7 ? 5 : 10) * p;
 }
 
-/* --------------------------------------------------------- table views */
-function dataTable(series, headers, fmt) {
-  const dates = series[0]?.dates || [];
-  const idx = dates.map((_, i) => i).reverse().slice(0, 400);
-  return `<div style="max-height:320px;overflow:auto;margin-top:14px"><table>
-    <thead><tr><th>Date</th>${headers.map(h => `<th>${esc(h)}</th>`).join("")}</tr></thead>
-    <tbody>${idx.map(i => `<tr><td>${esc(fmtDate(dates[i]))}</td>${series.map(s =>
-      `<td class="num">${s.values[i] == null ? "—" : fmt(s.values[i])}</td>`).join("")}</tr>`).join("")}
-    </tbody></table></div>`;
-}
-
 /* -------------------------------------------------------------- charts */
 let detailSeries = [], cmpSeries = [], detailMeta = {};
 
@@ -887,7 +874,6 @@ function renderDetail() {
 
   if (!detailSeries.length) {
     host.innerHTML = `<p class="loading">No history for ${esc(state.selected || "")} over ${esc(state.period)}.</p>`;
-    $("#detail-table").classList.add("hidden");
     return;
   }
   const vals = detailSeries[0].values.filter(v => v != null);
@@ -899,8 +885,6 @@ function renderDetail() {
     yFmt: fmtPrice,
     tipFmt: (v) => `${fmtPrice(v)}  <span style="color:var(--text-muted)">${fmtFromHigh(v, high)}</span>`,
   });
-  $("#detail-table").innerHTML = state.tableView ? dataTable(detailSeries, [state.selected + " close"], fmtPrice) : "";
-  $("#detail-table").classList.toggle("hidden", !state.tableView);
 }
 
 function renderCompare() {
@@ -930,9 +914,6 @@ function renderCompare() {
       state.hidden.has(s) ? state.hidden.delete(s) : state.hidden.add(s);
       renderCompare();
     }));
-  $("#cmp-table").innerHTML = state.tableView
-    ? dataTable(cmpSeries, cmpSeries.map(s => s.symbol + " (=100)"), (v) => v.toFixed(1)) : "";
-  $("#cmp-table").classList.toggle("hidden", !state.tableView);
 }
 
 /* ---------------------------------------------------------- data loads */
@@ -1052,12 +1033,6 @@ $("#periods").querySelectorAll("[data-p]").forEach(b =>
       o.setAttribute("aria-pressed", String(o.dataset.p === state.period)));
     loadHistory();
   }));
-
-$("#tableview").addEventListener("click", () => {
-  state.tableView = !state.tableView;
-  $("#tableview").setAttribute("aria-pressed", String(state.tableView));
-  renderDetail(); renderCompare();
-});
 
 $("#addbtn").addEventListener("click", addSymbol);
 $("#addsym").addEventListener("keydown", (e) => { if (e.key === "Enter") addSymbol(); });
