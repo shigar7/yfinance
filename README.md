@@ -52,10 +52,10 @@ saved, but a symbol that resolves to the *wrong* instrument still resolves.
 | Close | `fast_info.lastPrice`, falling back to the last settled close |
 | Day % | vs previous close |
 | 1M % | vs the last close on or before 30 calendar days ago |
-| 52-week range | meter: the last price's position between the 1y low and high |
+| 52-week range | meter: the last price's position between the 1y low and high, as traded |
 | 1 year | inline area chart of the last year of closes |
 
-## Three things worth knowing
+## A few things worth knowing
 
 **In-progress sessions come back as NaN.** Yahoo's daily bar for a session that
 has not settled has NaN OHLC — notably on `.AX` — so `Close.iloc[-1]` is NaN
@@ -71,6 +71,21 @@ forward-fills — `align()` in `app.py`.
 trips, so a seven-symbol tab is twenty-one requests. They go through a thread
 pool (`cached_many()`), which makes a cold tab load roughly flat with symbol
 count rather than linear.
+
+**Only one chart includes distributions.** yfinance defaults to
+`auto_adjust=True`, which back-adjusts historical closes for dividends, so a
+series is total return unless you say otherwise. That is right for the compare
+chart, where a 3.5% yielder next to a 1.0% one would otherwise read as a
+laggard, and wrong everywhere else — a 52-week low nobody ever paid is not a
+52-week low. So `fetch_quote()` and the detail chart pass `auto_adjust=False`
+and the compare chart does not.
+
+Yahoo never adjusts intraday bars, which is what made this worth chasing: the
+detail chart was already on real prices up to 1Y (1m–1h bars) and silently
+switched to total return at 3Y, where the interval steps down to daily. VHY's
+MAX low read 19.74 against a floor of 43.21. Splits are handled either way —
+Yahoo's raw OHLC is already split-adjusted — so `auto_adjust=False` does not
+reintroduce NVDA's 10:1 cliff.
 
 **Colour is pinned per symbol, not per row.** `ensure_slots()` assigns each
 symbol a stable colour slot that survives reordering and deletion, so removing

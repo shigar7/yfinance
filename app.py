@@ -233,15 +233,23 @@ def clean(x) -> float | None:
     return None if math.isnan(f) or math.isinf(f) else f
 
 
-def raw_history(symbol: str, period: str, interval: str) -> pd.DataFrame:
+def raw_history(symbol: str, period: str, interval: str,
+                adjust: bool = True) -> pd.DataFrame:
     """history() by period, falling back to a start date for the windows that
-    are not in Yahoo's period vocabulary."""
+    are not in Yahoo's period vocabulary.
+
+    `adjust` is yfinance's auto_adjust: True back-adjusts historical closes for
+    distributions, so the series is total return rather than price. Splits are
+    handled either way — Yahoo's raw OHLC is already split-adjusted — so this
+    flag only decides whether dividends are in the line. Note that Yahoo never
+    adjusts intraday bars, so on those it is a no-op whichever way it is set.
+    """
     tk = yf.Ticker(symbol)
     days = WINDOW_DAYS.get(period)
     if days is None:
-        return tk.history(period=period, interval=interval)
+        return tk.history(period=period, interval=interval, auto_adjust=adjust)
     start = (pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)).date()
-    return tk.history(start=start.isoformat(), interval=interval)
+    return tk.history(start=start.isoformat(), interval=interval, auto_adjust=adjust)
 
 
 def close_series(hist: pd.DataFrame) -> pd.Series:
@@ -287,7 +295,12 @@ def downsample(values: list, target: int = 120) -> list:
 def fetch_quote(symbol: str) -> dict:
     """One year of daily closes powers the quote, the 1M change, the 52-week
     range and the inline chart. fast_info carries the current session price
-    that the daily OHLC bar is still NaN for (notably on .AX)."""
+    that the daily OHLC bar is still NaN for (notably on .AX).
+
+    Unadjusted, so the whole table is prices: the 52-week range matches what a
+    broker shows, and 1M % sits beside a Day % that was always price-based.
+    Total return lives on the compare chart, which is the one place it earns
+    its keep — there a 3.5% yielder and a 1.0% yielder are on one axis."""
     out: dict = {"symbol": symbol, "name": symbol, "currency": None,
                  "price": None, "prevClose": None, "change": None,
                  "changePct": None, "monthPct": None,
@@ -295,7 +308,7 @@ def fetch_quote(symbol: str) -> dict:
                  "spark": [], "sparkStart": None, "error": None}
     try:
         tk = yf.Ticker(symbol)
-        hist = tk.history(period="1y", interval="1d")
+        hist = tk.history(period="1y", interval="1d", auto_adjust=False)
         closes = close_series(hist)
 
         price = prev = None
@@ -361,7 +374,12 @@ def fetch_history(symbol: str, period: str, granular: bool = False) -> dict:
         # Yahoo returns an empty frame when a fine interval exceeds its window;
         # step down until something comes back.
         for _ in range(4):
-            hist = raw_history(symbol, yf_period, tried)
+            # The detail chart is a record of what the thing traded at, so it
+            # stays on price. Without this it would silently switch basis at
+            # the 1Y/3Y boundary, where the interval steps down from 1h to 1d
+            # and Yahoo starts adjusting: VHY's MAX low reads 19.74 adjusted
+            # against a real floor of 43.21.
+            hist = raw_history(symbol, yf_period, tried, adjust=not granular)
             closes = close_series(hist)
             if len(closes) > 1:
                 break

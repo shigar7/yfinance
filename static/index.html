@@ -380,7 +380,9 @@ td.chart-cell { padding-right: 2px; }
   <div class="card-head">
     <div>
       <h2 id="list-title">Watchlist</h2>
-      <p class="sub">Click a symbol for its full chart at the finest interval Yahoo will serve. The rail shows where the last price sits in its 52-week range.</p>
+      <p class="sub">Click a symbol for its full chart at the finest interval Yahoo will serve.
+        The rail shows where the last price sits in its 52-week range. Prices are as traded —
+        distributions are not reinvested.</p>
     </div>
   </div>
   <div id="quotes"><p class="loading">Loading quotes…</p></div>
@@ -413,14 +415,16 @@ td.chart-cell { padding-right: 2px; }
   <div class="card-head">
     <div>
       <h2>Relative performance</h2>
-      <p class="sub">Every symbol indexed to 100 at the start of the period, so AUD and USD
-        instruments compare directly on one axis.</p>
+      <p class="sub">Total return — distributions reinvested — indexed to 100 at the start of
+        the period. That puts AUD and USD instruments on one axis, and stops a high yielder
+        from reading as a laggard against a low one.</p>
     </div>
   </div>
   <div class="chart-host" id="cmp-host"><p class="loading">Loading…</p></div>
   <div class="legend" id="cmp-legend"></div>
   <p class="note">Indexed series show percentage change from the period start — not price.
-    Absolute prices stay in the watchlist above, each in its own currency.</p>
+    Absolute prices stay in the watchlist above, each in its own currency. This is the only
+    chart here that includes distributions; the table and the price chart are as traded.</p>
 </section>
 
 </div>
@@ -862,7 +866,7 @@ function renderDetail() {
   const periodHigh = dvals.length ? Math.max(...dvals) : null;
   const who = q && q.name !== q.symbol ? `${q.name} · ${q.currency || ""} · ` : "";
   $("#detail-sub").textContent = periodHigh
-    ? `${who}${state.period} — left axis price, right axis % below the ${state.period} high of ${fmtPrice(periodHigh)}`
+    ? `${who}${state.period} — left axis traded price, right axis % below the ${state.period} high of ${fmtPrice(periodHigh)}`
     : `${who}${state.period}`;
 
   const fromHigh = q && q.price != null && periodHigh ? (q.price / periodHigh - 1) * 100 : null;
