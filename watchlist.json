@@ -5,21 +5,21 @@
       "name": "AUS",
       "symbols": [
         "IVV.AX",
-        "VGB.AX",
-        "IOZ.AX",
         "VGS.AX",
+        "IOZ.AX",
+        "VAS.AX",
         "VHY.AX",
         "IEU.AX",
         "VAE.AX"
       ],
       "slots": {
-        "VGB.AX": 0,
         "IOZ.AX": 1,
         "IVV.AX": 2,
         "VGS.AX": 3,
         "VHY.AX": 4,
         "IEU.AX": 5,
-        "VAE.AX": 6
+        "VAE.AX": 6,
+        "VAS.AX": 7
       }
     },
     {
@@ -80,6 +80,18 @@
       "slots": {
         "CL=F": 0,
         "QAU.AX": 1
+      }
+    },
+    {
+      "id": "3925ab96",
+      "name": "FX",
+      "symbols": [
+        "AUDINR=X",
+        "AUDUSD=X"
+      ],
+      "slots": {
+        "AUDUSD=X": 2,
+        "AUDINR=X": 1
       }
     }
   ]
