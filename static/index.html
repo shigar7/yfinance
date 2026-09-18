@@ -483,6 +483,26 @@ function axisDate(s, intraday, spanDays) {
 const dirClass = (v) => v == null ? "" : v >= 0 ? "up" : "down";
 const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
+/* A round trip is a round trip however fast the server answers: over a VPN the
+   3ms the server spends is rounding error next to the latency either side of
+   it. So a series the page has already pulled is never pulled again — held for
+   the same three hours the server holds it, cleared by Refresh. Concurrent
+   callers asking for the same URL share one request rather than racing. */
+const wire = new Map();          // url -> {at, value} | {at, promise}
+const WIRE_TTL = 3 * 3600 * 1000;
+const WIRE_MAX = 240;
+
+async function apiCached(path) {
+  const hit = wire.get(path);
+  if (hit && Date.now() - hit.at < WIRE_TTL) return hit.promise || hit.value;
+  const promise = api(path).then(
+    (value) => { wire.set(path, { at: Date.now(), value }); return value; },
+    (err) => { wire.delete(path); throw err; });
+  wire.set(path, { at: Date.now(), promise });
+  if (wire.size > WIRE_MAX) wire.delete(wire.keys().next().value);
+  return promise;
+}
+
 async function api(path, opts) {
   const r = await fetch(path, opts);
   if (!r.ok) {
@@ -972,7 +992,7 @@ async function loadCompare() {
   const host = $("#cmp-host");
   host.classList.add("dim");            // hold the previous render, no skeleton flash
   try {
-    const cmp = await api(`/api/history?symbols=${encodeURIComponent(state.symbols.join(","))}&period=${state.period}`);
+    const cmp = await apiCached(`/api/history?symbols=${encodeURIComponent(state.symbols.join(","))}&period=${state.period}`);
     if (seq !== historySeq) return;
     cmpSeries = cmp.series.filter(s => s.close.some(v => v != null)).map(s => {
       const base = s.close.find(v => v != null) || 1;
@@ -990,7 +1010,7 @@ async function loadDetail() {
   const host = $("#detail-host");
   host.classList.add("dim");
   try {
-    const det = await api(`/api/history?symbols=${encodeURIComponent(want)}&period=${state.period}&granular=true`);
+    const det = await apiCached(`/api/history?symbols=${encodeURIComponent(want)}&period=${state.period}&granular=true`);
     if (seq !== detailSeq) return;
     const d0 = det.series[0];
     detailMeta = d0 ? { interval: d0.interval, intraday: d0.intraday } : {};
@@ -1009,20 +1029,21 @@ async function loadHistory() {
   prefetchDetails();
 }
 
-/* A cold detail series costs Yahoo a round trip; a warm one is a local read.
-   Once the tab is on screen, quietly pull the rest of its symbols so the first
-   click on each is already held. Results are discarded — this only warms the
-   server's cache — and a real load supersedes it via the usual tickets. */
+/* Once the tab is on screen, quietly pull the rest of its symbols into the
+   same client-side cache, one at a time so the fetches queue behind anything
+   the user actually asks for. A click on a prefetched symbol then costs no
+   request at all — which is the only thing that helps when the link, not the
+   server, is the slow part. */
 let prefetching = null;
 async function prefetchDetails() {
   const token = {};
   prefetching = token;
-  const rest = state.symbols.filter(s => s !== state.selected);
-  for (const sym of rest) {
+  for (const sym of state.symbols) {
     if (prefetching !== token) return;      // tab or period moved on
-    try {
-      await api(`/api/history?symbols=${encodeURIComponent(sym)}&period=${state.period}&granular=true`);
-    } catch (e) { /* a symbol that will not load is the click's problem, not ours */ }
+    const url = `/api/history?symbols=${encodeURIComponent(sym)}&period=${state.period}&granular=true`;
+    if (wire.has(url)) continue;
+    try { await apiCached(url); }
+    catch (e) { /* a symbol that will not load is the click's problem, not ours */ }
   }
 }
 
@@ -1106,7 +1127,11 @@ $("#addsym").addEventListener("keydown", (e) => { if (e.key === "Enter") addSymb
 
 $("#refresh").addEventListener("click", async () => {
   $("#refresh").disabled = true;
-  try { await api("/api/refresh", { method: "POST" }); await loadQuotes(); await loadHistory(); }
+  try {
+    await api("/api/refresh", { method: "POST" });
+    wire.clear();                 // the server just dropped its copy; drop ours
+    await loadQuotes(); await loadHistory();
+  }
   finally { $("#refresh").disabled = false; }
 });
 

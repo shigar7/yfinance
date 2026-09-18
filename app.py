@@ -17,6 +17,7 @@ from uuid import uuid4
 import pandas as pd
 import yfinance as yf
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -77,6 +78,11 @@ ERROR_TTL = 60
 CACHE_FILE = ROOT / "cache.sqlite"
 
 app = FastAPI(title="Stonks Tracker")
+# These payloads are long arrays of numbers and near-identical date strings,
+# which is close to the best case for gzip: a year of hourly bars goes from
+# ~64KB to ~8KB. Worth far more than server-side speed when the client is a
+# phone on the other end of a slow link.
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 
 # --------------------------------------------------------------------------
@@ -327,6 +333,15 @@ def pct_change_since(closes: pd.Series, days: int) -> float | None:
     return (now - base) / base * 100.0
 
 
+def trim(values: list) -> list:
+    """Yahoo hands back full float64 repr — 71.58999633789062 is seventeen
+    characters to say 71.59. Eight significant figures is more than any of
+    these instruments quote to, and it is a third of the bytes on the wire.
+    Significant figures rather than decimal places, so a sub-cent instrument
+    does not get rounded to zero."""
+    return [None if v is None else float(f"{v:.8g}") for v in values]
+
+
 def downsample(values: list, target: int = 120) -> list:
     if len(values) <= target:
         return values
@@ -397,7 +412,7 @@ def fetch_quote(symbol: str) -> dict:
         vals = [v for v in vals if v is not None]
         if price is not None and vals and vals[-1] != price:
             vals.append(price)
-        out["spark"] = downsample(vals)
+        out["spark"] = trim(downsample(vals))
         if len(closes):
             out["sparkStart"] = closes.index[0].strftime("%Y-%m-%d")
 
@@ -436,7 +451,7 @@ def fetch_history(symbol: str, period: str, granular: bool = False) -> dict:
         out["intraday"] = tried in INTRADAY
         fmt = "%Y-%m-%dT%H:%M" if out["intraday"] else "%Y-%m-%d"
         out["dates"] = [d.strftime(fmt) for d in closes.index]
-        out["close"] = [clean(v) for v in closes.tolist()]
+        out["close"] = trim([clean(v) for v in closes.tolist()])
     except Exception as exc:
         out["error"] = str(exc)[:200]
     return out
