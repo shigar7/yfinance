@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import secrets
 import sqlite3
 import threading
 import time
@@ -16,9 +18,9 @@ from uuid import uuid4
 
 import pandas as pd
 import yfinance as yf
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -76,6 +78,33 @@ CACHE_TTL = 3 * 3600    # seconds
 # three hours: retry it after a minute.
 ERROR_TTL = 60
 CACHE_FILE = ROOT / "cache.sqlite"
+TOKEN_FILE = ROOT / "token.txt"
+COOKIE = "stonks_token"
+
+
+def load_token() -> str:
+    """$STONKS_TOKEN wins; otherwise a token is minted once into token.txt and
+    reused from there, so a restart does not invalidate the link on your phone.
+    The file is gitignored — it is the password, and the repo is not."""
+    env = os.environ.get("STONKS_TOKEN", "").strip()
+    if env:
+        return env
+    try:
+        held = TOKEN_FILE.read_text().strip()
+        if held:
+            return held
+    except OSError:
+        pass
+    minted = secrets.token_urlsafe(18)
+    TOKEN_FILE.write_text(minted + "\n")
+    try:
+        TOKEN_FILE.chmod(0o600)
+    except OSError:
+        pass
+    return minted
+
+
+TOKEN = load_token()
 
 app = FastAPI(title="Stonks Tracker")
 # These payloads are long arrays of numbers and near-identical date strings,
@@ -83,6 +112,61 @@ app = FastAPI(title="Stonks Tracker")
 # ~64KB to ~8KB. Worth far more than server-side speed when the client is a
 # phone on the other end of a slow link.
 app.add_middleware(GZipMiddleware, minimum_size=500)
+
+
+# --------------------------------------------------------------------------
+# authentication — one shared token
+# --------------------------------------------------------------------------
+# The port is reachable from the internet, and every endpoint reads or writes
+# your lists, so the whole app sits behind one token. It arrives as ?token= on
+# the first visit and is kept in a cookie after that, because the manifest's
+# start_url is "/" — a home-screen launch has no query string to carry it.
+#
+# Icons and the manifest stay open: they hold no data, and Chrome fetches the
+# manifest without credentials, so gating it would break installability for
+# nothing.
+OPEN_PATHS = {"/sw.js", "/healthz"}
+
+
+def authorised(request: Request) -> bool:
+    for candidate in (request.query_params.get("token"),
+                      request.headers.get("x-token"),
+                      request.cookies.get(COOKIE)):
+        if candidate and secrets.compare_digest(candidate, TOKEN):
+            return True
+    return False
+
+
+@app.middleware("http")
+async def require_token(request: Request, call_next):
+    path = request.url.path
+    if path in OPEN_PATHS or path.startswith("/static/"):
+        return await call_next(request)
+
+    if not authorised(request):
+        # A bare 401 on the page itself is friendlier than a blank screen, and
+        # tells a scanner nothing it could not already see.
+        if path == "/":
+            return PlainTextResponse(
+                "Stonks Tracker needs a token.\n\n"
+                "Open  http://<this-host>:8000/?token=YOUR_TOKEN  once; it is "
+                "remembered in a cookie after that.\n",
+                status_code=401)
+        return JSONResponse({"detail": "Bad or missing token"}, status_code=401)
+
+    # A token in the URL is a token in history, in logs and in a shared
+    # screenshot. Take it, set the cookie, and send the browser to a clean "/".
+    if path == "/" and request.query_params.get("token"):
+        redirect = RedirectResponse("/", status_code=303)
+        redirect.set_cookie(COOKIE, TOKEN, max_age=365 * 24 * 3600,
+                            httponly=True, samesite="lax", path="/")
+        return redirect
+
+    response = await call_next(request)
+    if path == "/" and not request.cookies.get(COOKIE):
+        response.set_cookie(COOKIE, TOKEN, max_age=365 * 24 * 3600,
+                            httponly=True, samesite="lax", path="/")
+    return response
 
 
 # --------------------------------------------------------------------------
@@ -622,6 +706,13 @@ def history(symbols: str, period: str = "1Y", granular: bool = False):
 @app.post("/api/refresh")
 def refresh():
     invalidate()
+    return {"ok": True}
+
+
+@app.get("/healthz")
+def healthz():
+    """Unauthenticated on purpose: it says the process is up and nothing else.
+    service.sh and cron can watch it without holding the token."""
     return {"ok": True}
 
 

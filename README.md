@@ -47,17 +47,40 @@ of those lines will ever fire. Start it from the entrypoint, not just by hand �
 otherwise the schedule dies at the next restart and takes every other cron job
 with it.
 
-## ⚠️ There is no authentication
+## The token
 
-Every endpoint is unauthenticated, so anyone who can reach the port can read and
-modify your lists. That is fine on `localhost` or over a private network
-(Tailscale, WireGuard, an SSH tunnel). **Do not expose this to the internet
-without putting auth in front of it.**
+Everything except the icons, the manifest, `/sw.js` and `/healthz` needs a
+shared token. Open it once with the token in the URL:
+
+```
+http://<host>:8000/?token=YOUR_TOKEN
+```
+
+The server sets a year-long cookie and redirects to a clean `/`, so the token
+does not linger in history or in a screenshot, and a home-screen launch — which
+starts at `/` with no query string — stays signed in. Scripts can send it as
+`?token=` or an `X-Token:` header instead.
+
+The token is read from `$STONKS_TOKEN` if it is set. Otherwise one is minted on
+first run into `token.txt` (mode 600, gitignored) and reused from there, so a
+restart does not invalidate the link on your phone. To roll it, delete the file
+and restart — every device then has to be re-opened with the new URL.
+
+`/healthz` is deliberately open so `service.sh` and cron can watch the process
+without holding the token. It reports that the server is up and nothing else.
+
+### ⚠️ What this does and does not protect
+
+Over plain http the token crosses the network in cleartext, in a URL or a
+cookie. It stops drive-by scanners and anyone who simply finds the port — which
+is what an internet-facing instance is actually exposed to — but it is not
+protection against someone who can watch the traffic. For that, put it behind
+HTTPS (which also makes Chrome offer to install it as an app) or on a private
+network: Tailscale, WireGuard, an SSH tunnel.
 
 Note also that `yfinance` is an unofficial scraper. A publicly reachable
 instance serving real traffic will get rate-limited or IP-blocked by Yahoo, and
-Yahoo's terms don't permit redistributing their data. Personal use behind auth
-avoids both problems.
+Yahoo's terms don't permit redistributing their data.
 
 ## On a phone
 
@@ -205,7 +228,8 @@ legend leaves all of them solid rather than fading every line at once.
 | `GET /api/history?symbols=A,B&period=1Y` | aligned closes for the compare chart |
 | `GET /api/history?symbols=A&period=1Y&granular=true` | finest-interval series |
 | `POST /api/refresh` | drop the cache, memory and disk |
-| `GET /` | the page |
+| `GET /?token=…` | the page; sets the cookie and redirects to `/` |
+| `GET /healthz` | liveness, no token required |
 | `GET /sw.js` | service worker, served from the root so its scope covers the origin |
 | `GET /static/…` | icons and the web manifest |
 

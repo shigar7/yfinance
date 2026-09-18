@@ -17,3 +17,4 @@ daemon.pid
 daemon.log
 cron.log
 cache.sqlite
+token.txt
