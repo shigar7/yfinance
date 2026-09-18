@@ -18,6 +18,35 @@ PORT=8080 ./run.sh       # different port
 HOST=127.0.0.1 ./run.sh  # loopback only (default binds 0.0.0.0)
 ```
 
+### Running it as a daemon
+
+`run.sh` stays in the foreground, which is right for a terminal and wrong for
+anything that has to survive you closing it. `service.sh` backgrounds it with a
+PID file:
+
+```bash
+./service.sh start       # $PORT, default 8000
+./service.sh status
+./service.sh restart
+./service.sh stop
+```
+
+`start` is idempotent, so a cron entry doubles as a keep-alive — it brings the
+app back within five minutes of a crash, and starts it after a reboot:
+
+```cron
+@reboot     /path/to/yfinance/service.sh start >> /path/to/yfinance/cron.log 2>&1
+*/5 * * * * /path/to/yfinance/service.sh start >> /path/to/yfinance/cron.log 2>&1
+```
+
+If the port is already held by something else, `start` says so and exits rather
+than letting uvicorn fail and cron retry forever with no explanation.
+
+In a container there is usually no init, so `crond` is not running and neither
+of those lines will ever fire. Start it from the entrypoint, not just by hand —
+otherwise the schedule dies at the next restart and takes every other cron job
+with it.
+
 ## ⚠️ There is no authentication
 
 Every endpoint is unauthenticated, so anyone who can reach the port can read and
@@ -30,6 +59,28 @@ instance serving real traffic will get rate-limited or IP-blocked by Yahoo, and
 Yahoo's terms don't permit redistributing their data. Personal use behind auth
 avoids both problems.
 
+## On a phone
+
+The layout restacks below 620px: the table becomes one card per row, and the
+charts drop their desktop margins. There is a manifest and an icon set, so
+**Add to Home screen** gives a real icon and name rather than a thumbnail.
+
+Whether you get a *dedicated window* or just a tab depends on the browser:
+
+| | Result |
+|---|---|
+| Desktop Chrome | ⋮ → Create shortcut → **Open as window**. Works over plain http. |
+| iOS Safari | Share → Add to Home Screen. Standalone, over plain http — iOS keys off `apple-mobile-web-app-capable`, not installability. |
+| Android Chrome | A tab, unless the origin is https. No workaround. |
+
+Chrome only offers **Install app** on a secure origin, so over http on a LAN
+the install path is closed regardless of what the page contains. Everything
+else it checks is already in place — manifest, 192 and 512 icons, `standalone`,
+a service worker with a fetch handler — so putting a cert in front of it is the
+only change needed. `sw.js` registers behind an `isSecureContext` guard and does
+not cache: the app is live market data, and a stale cache would show yesterday's
+prices under today's timestamp.
+
 ## Tabs
 
 Lists live in `watchlist.json` and are editable from the page: **+ New list** to
@@ -38,6 +89,10 @@ add, and `×` on the active tab to delete. Symbols reorder within a list with th
 
 Renaming and reordering *tabs* are not in the UI, but the endpoints are still
 there if you want them (`PATCH /api/lists/{id}` and `POST /api/lists/{id}/move`).
+
+The period row sits between the table and the charts, because it only ever
+scoped the charts: the table is always a one-year window, and Day % and 1M %
+are fixed columns.
 
 Use Yahoo's suffixes — `.AX` for ASX, `=F` for futures, `^` for indices. Some
 bare tickers resolve to something you did not mean: `QAU` is a US fund, while
@@ -119,6 +174,12 @@ The relative-performance chart indexes every series to 100 at the period start,
 so AUD and USD instruments compare on one axis. A dual-axis chart of raw prices
 would invent correlations that are not in the data.
 
+The selected symbol — whichever row is driving the detail chart — draws solid
+and paints last, so it crosses over the bundle; the rest drop to 0.28 alpha and
+stay as context. Colours do not change, so the legend still reads. Emphasis is
+resolved against the series actually drawn: hiding the selected symbol from the
+legend leaves all of them solid rather than fading every line at once.
+
 ## API
 
 | Endpoint | Purpose |
@@ -135,6 +196,9 @@ would invent correlations that are not in the data.
 | `GET /api/history?symbols=A,B&period=1Y` | aligned closes for the compare chart |
 | `GET /api/history?symbols=A&period=1Y&granular=true` | finest-interval series |
 | `POST /api/refresh` | drop all caches |
+| `GET /` | the page |
+| `GET /sw.js` | service worker, served from the root so its scope covers the origin |
+| `GET /static/…` | icons and the web manifest |
 
 Periods: `1D 5D 1M 6M YTD 1Y 3Y 5Y MAX`.
 
