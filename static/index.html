@@ -942,7 +942,7 @@ async function loadLists() {
    always the later one. Each load takes a ticket; a response whose ticket has
    been superseded is dropped, so the charts can never show the previous tab's
    data under the current tab's name. */
-let quotesSeq = 0, historySeq = 0;
+let quotesSeq = 0, historySeq = 0, detailSeq = 0;
 
 async function loadQuotes() {
   if (!state.activeId) { state.quotes = []; state.symbols = []; renderQuotes(); return; }
@@ -962,39 +962,84 @@ async function loadQuotes() {
   renderQuotes();
 }
 
-async function loadHistory() {
-  if (!state.symbols.length) {
-    cmpSeries = []; detailSeries = []; renderCompare(); renderDetail(); return;
-  }
+/* The compare series depends on (symbols, period) and the detail series on
+   (selection, period), so a symbol click only invalidates the second one.
+   Loading them together made every click refetch the whole compare chart to
+   redraw it identically with a different line emphasised. */
+async function loadCompare() {
+  if (!state.symbols.length) { cmpSeries = []; renderCompare(); return; }
   const seq = ++historySeq;
-  const hosts = [$("#cmp-host"), $("#detail-host")];
-  hosts.forEach(h => h.classList.add("dim"));   // hold previous render, no skeleton flash
+  const host = $("#cmp-host");
+  host.classList.add("dim");            // hold the previous render, no skeleton flash
   try {
-    const [cmp, det] = await Promise.all([
-      api(`/api/history?symbols=${encodeURIComponent(state.symbols.join(","))}&period=${state.period}`),
-      state.selected
-        ? api(`/api/history?symbols=${encodeURIComponent(state.selected)}&period=${state.period}&granular=true`)
-        : Promise.resolve({ series: [] }),
-    ]);
+    const cmp = await api(`/api/history?symbols=${encodeURIComponent(state.symbols.join(","))}&period=${state.period}`);
     if (seq !== historySeq) return;
     cmpSeries = cmp.series.filter(s => s.close.some(v => v != null)).map(s => {
       const base = s.close.find(v => v != null) || 1;
       return { symbol: s.symbol, dates: s.dates, values: s.close.map(v => v == null ? null : (v / base) * 100) };
     });
+  } finally {
+    if (seq === historySeq) host.classList.remove("dim");
+  }
+  renderCompare();
+}
+
+async function loadDetail() {
+  if (!state.selected) { detailSeries = []; detailMeta = {}; renderDetail(); return; }
+  const seq = ++detailSeq, want = state.selected;
+  const host = $("#detail-host");
+  host.classList.add("dim");
+  try {
+    const det = await api(`/api/history?symbols=${encodeURIComponent(want)}&period=${state.period}&granular=true`);
+    if (seq !== detailSeq) return;
     const d0 = det.series[0];
     detailMeta = d0 ? { interval: d0.interval, intraday: d0.intraday } : {};
     detailSeries = d0 && d0.close.length ? [{ symbol: d0.symbol, dates: d0.dates, values: d0.close }] : [];
   } finally {
-    if (seq === historySeq) hosts.forEach(h => h.classList.remove("dim"));
+    if (seq === detailSeq) host.classList.remove("dim");
   }
-  renderCompare(); renderDetail();
+  renderDetail();
+}
+
+async function loadHistory() {
+  if (!state.symbols.length) {
+    cmpSeries = []; detailSeries = []; renderCompare(); renderDetail(); return;
+  }
+  await Promise.all([loadCompare(), loadDetail()]);
+  prefetchDetails();
+}
+
+/* A cold detail series costs Yahoo a round trip; a warm one is a local read.
+   Once the tab is on screen, quietly pull the rest of its symbols so the first
+   click on each is already held. Results are discarded — this only warms the
+   server's cache — and a real load supersedes it via the usual tickets. */
+let prefetching = null;
+async function prefetchDetails() {
+  const token = {};
+  prefetching = token;
+  const rest = state.symbols.filter(s => s !== state.selected);
+  for (const sym of rest) {
+    if (prefetching !== token) return;      // tab or period moved on
+    try {
+      await api(`/api/history?symbols=${encodeURIComponent(sym)}&period=${state.period}&granular=true`);
+    } catch (e) { /* a symbol that will not load is the click's problem, not ours */ }
+  }
 }
 
 function select(sym) {
+  if (sym === state.selected) return;
   state.selected = sym;
-  renderQuotes();
-  loadHistory();
+  // Selection is an attribute on two rows, not a new table: rebuilding it
+  // regenerates every inline SVG and re-binds every listener for nothing.
+  markSelected();
+  renderCompare();      // same data, different line emphasised — a re-render, not a fetch
+  loadDetail();
   try { $("#detail-host").scrollIntoView({ behavior: "smooth", block: "nearest" }); } catch (e) {}
+}
+
+function markSelected() {
+  $("#quotes").querySelectorAll("tbody tr").forEach(tr =>
+    tr.setAttribute("aria-selected", String(tr.dataset.sym === state.selected)));
 }
 
 async function moveSymbol(sym, delta) {
