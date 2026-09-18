@@ -122,10 +122,19 @@ series of different lengths would misalign if charted by array position. The
 compare endpoint reindexes every series onto the union of dates and
 forward-fills — `align()` in `app.py`.
 
+**Everything is cached for three hours, on disk.** Quotes, names and every
+history series land in `cache.sqlite` next to the app, and a request only goes
+to Yahoo when what is held is older than three hours — so switching tabs or
+stocks you have already looked at is a local read, not a round trip, and a
+restart comes back warm. The header's *as of* is when the oldest row on the tab
+was fetched, not when it was served. **Refresh** drops the whole cache; a fetch
+that failed (rate limit, bad symbol) is retried after a minute rather than
+pinned for three hours. Delete the file if you want to start cold.
+
 **Quotes are fetched in parallel.** Each quote costs roughly three Yahoo round
-trips, so a seven-symbol tab is twenty-one requests. They go through a thread
-pool (`cached_many()`), which makes a cold tab load roughly flat with symbol
-count rather than linear.
+trips, so a seven-symbol tab is twenty-one requests. On a cold tab they go
+through a thread pool (`cached_many()`), which makes the load roughly flat with
+symbol count rather than linear.
 
 **Only one chart includes distributions.** yfinance defaults to
 `auto_adjust=True`, which back-adjusts historical closes for dividends, so a
@@ -192,10 +201,10 @@ legend leaves all of them solid rather than fading every line at once.
 | `POST /api/lists/{id}/symbols` `{"symbol":"GC=F"}` | add (validated first) |
 | `DELETE /api/lists/{id}/symbols/{symbol}` | remove |
 | `POST /api/lists/{id}/symbols/{symbol}/move` `{"delta":1}` | reorder symbols |
-| `GET /api/quotes?list_id={id}` | rows for one list (60s cache) |
+| `GET /api/quotes?list_id={id}` | rows for one list |
 | `GET /api/history?symbols=A,B&period=1Y` | aligned closes for the compare chart |
 | `GET /api/history?symbols=A&period=1Y&granular=true` | finest-interval series |
-| `POST /api/refresh` | drop all caches |
+| `POST /api/refresh` | drop the cache, memory and disk |
 | `GET /` | the page |
 | `GET /sw.js` | service worker, served from the root so its scope covers the origin |
 | `GET /static/…` | icons and the web manifest |

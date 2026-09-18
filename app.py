@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import math
+import sqlite3
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -66,29 +67,73 @@ FALLBACK = {"1m": "5m", "5m": "30m", "30m": "1h", "1h": "1d", "1d": "1wk", "1wk"
 # 7-symbol tab is 21 sequential requests if fetched in a loop. Fan them out.
 POOL = ThreadPoolExecutor(max_workers=12, thread_name_prefix="yf")
 
-QUOTE_TTL = 60      # seconds
-HISTORY_TTL = 600   # seconds
+# Everything Yahoo hands back is kept for three hours, on disk, so a tab or
+# symbol you have already looked at comes back without a round trip — and so
+# a restart does not start cold. Refresh drops the lot.
+CACHE_TTL = 3 * 3600    # seconds
+# A failed fetch (rate limit, bad symbol, network) must not be pinned for
+# three hours: retry it after a minute.
+ERROR_TTL = 60
+CACHE_FILE = ROOT / "cache.sqlite"
 
 app = FastAPI(title="Stonks Tracker")
 
 
 # --------------------------------------------------------------------------
-# tiny TTL cache
+# TTL cache: memory in front, sqlite behind
 # --------------------------------------------------------------------------
+# Values are the JSON the endpoints return (dicts and strings), so they go to
+# disk as-is. One row per key; the memory dict is only a copy of what is on
+# disk, so a cold process reads through to it and warms itself up.
 _cache: dict[str, tuple[float, object]] = {}
 _lock = threading.Lock()
+_db = sqlite3.connect(CACHE_FILE, check_same_thread=False)
+_db.execute("CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, at REAL, value TEXT)")
+_db.commit()
+
+
+def _disk_get(key: str) -> tuple[float, object] | None:
+    row = _db.execute("SELECT at, value FROM cache WHERE key = ?", (key,)).fetchone()
+    if not row:
+        return None
+    try:
+        return row[0], json.loads(row[1])
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _disk_put(key: str, at: float, value) -> None:
+    _db.execute("INSERT OR REPLACE INTO cache (key, at, value) VALUES (?, ?, ?)",
+                (key, at, json.dumps(value)))
+    _db.commit()
+
+
+def _failed(value) -> bool:
+    return isinstance(value, dict) and bool(value.get("error"))
 
 
 def cached(key: str, ttl: int, produce):
     now = time.time()
     with _lock:
         hit = _cache.get(key)
-        if hit and now - hit[0] < ttl:
+        if hit is None:
+            hit = _disk_get(key)
+            if hit is not None:
+                _cache[key] = hit
+        if hit and now - hit[0] < (ERROR_TTL if _failed(hit[1]) else ttl):
             return hit[1]
     value = produce()
     with _lock:
         _cache[key] = (now, value)
+        _disk_put(key, now, value)
     return value
+
+
+def cached_at(key: str) -> float | None:
+    """When the value under `key` was fetched, if it is held."""
+    with _lock:
+        hit = _cache.get(key)
+    return hit[0] if hit else None
 
 
 def cached_many(items: list, key: str, ttl: int, produce) -> list:
@@ -106,6 +151,8 @@ def invalidate(prefix: str = "") -> None:
     with _lock:
         for k in [k for k in _cache if k.startswith(prefix)]:
             del _cache[k]
+        _db.execute("DELETE FROM cache WHERE substr(key, 1, ?) = ?", (len(prefix), prefix))
+        _db.commit()
 
 
 # --------------------------------------------------------------------------
@@ -258,9 +305,6 @@ def close_series(hist: pd.DataFrame) -> pd.Series:
     return hist["Close"].dropna()
 
 
-NAME_TTL = 86400  # names change far more rarely than prices
-
-
 def fetch_name(symbol: str) -> str:
     try:
         info = yf.Ticker(symbol).get_info()
@@ -357,7 +401,7 @@ def fetch_quote(symbol: str) -> dict:
         if len(closes):
             out["sparkStart"] = closes.index[0].strftime("%Y-%m-%d")
 
-        out["name"] = cached(f"n:{symbol}", NAME_TTL, lambda: fetch_name(symbol))
+        out["name"] = cached(f"n:{symbol}", CACHE_TTL, lambda: fetch_name(symbol))
     except Exception as exc:  # one bad symbol must not blank the page
         out["error"] = str(exc)[:200]
     return out
@@ -513,7 +557,7 @@ def add_symbol(list_id: str, body: SymbolIn):
     if symbol in entry["symbols"]:
         raise HTTPException(409, f"{symbol} is already in {entry['name']}")
 
-    probe = cached(f"q:{symbol}", QUOTE_TTL, lambda: fetch_quote(symbol))
+    probe = cached(f"q:{symbol}", CACHE_TTL, lambda: fetch_quote(symbol))
     if probe["price"] is None:
         raise HTTPException(404, f"No data for {symbol} — check the suffix (e.g. .AX for ASX)")
 
@@ -538,9 +582,13 @@ def remove_symbol(list_id: str, symbol: str):
 def quotes(list_id: str | None = None):
     lists = load_lists()
     entry = find_list(lists, list_id) if list_id else lists[0]
-    rows = cached_many(entry["symbols"], "q:{}", QUOTE_TTL, fetch_quote)
+    rows = cached_many(entry["symbols"], "q:{}", CACHE_TTL, fetch_quote)
+    # "as of" is when the oldest row was fetched, not when it was served —
+    # with a three-hour cache the two can be a long way apart.
+    ages = [t for t in (cached_at(f"q:{s}") for s in entry["symbols"]) if t]
+    as_of = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(min(ages))) if ages else None
     return {"listId": entry["id"], "name": entry["name"], "quotes": rows,
-            "slots": entry.get("slots", {}), "asOf": time.strftime("%Y-%m-%d %H:%M:%S")}
+            "slots": entry.get("slots", {}), "asOf": as_of}
 
 
 @app.get("/api/history")
@@ -549,8 +597,7 @@ def history(symbols: str, period: str = "1Y", granular: bool = False):
     if period not in PERIODS:
         raise HTTPException(400, f"period must be one of {', '.join(PERIODS)}")
     wanted = [s.strip() for s in (symbols or "").split(",") if s.strip()]
-    ttl = 90 if granular and DETAIL_PERIODS[period][1] in INTRADAY else HISTORY_TTL
-    series = cached_many(wanted, "h:{}:" + f"{period}:{granular}", ttl,
+    series = cached_many(wanted, "h:{}:" + f"{period}:{granular}", CACHE_TTL,
                          lambda s: fetch_history(s, period, granular))
     if not granular:
         series = align(series)
