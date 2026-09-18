@@ -7,6 +7,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import secrets
+import sqlite3
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -15,8 +18,9 @@ from uuid import uuid4
 
 import pandas as pd
 import yfinance as yf
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -66,29 +70,160 @@ FALLBACK = {"1m": "5m", "5m": "30m", "30m": "1h", "1h": "1d", "1d": "1wk", "1wk"
 # 7-symbol tab is 21 sequential requests if fetched in a loop. Fan them out.
 POOL = ThreadPoolExecutor(max_workers=12, thread_name_prefix="yf")
 
-QUOTE_TTL = 60      # seconds
-HISTORY_TTL = 600   # seconds
+# Everything Yahoo hands back is kept for three hours, on disk, so a tab or
+# symbol you have already looked at comes back without a round trip — and so
+# a restart does not start cold. Refresh drops the lot.
+CACHE_TTL = 3 * 3600    # seconds
+# A failed fetch (rate limit, bad symbol, network) must not be pinned for
+# three hours: retry it after a minute.
+ERROR_TTL = 60
+CACHE_FILE = ROOT / "cache.sqlite"
+TOKEN_FILE = ROOT / "token.txt"
+COOKIE = "stonks_token"
+
+
+def load_token() -> str:
+    """$STONKS_TOKEN wins; otherwise a token is minted once into token.txt and
+    reused from there, so a restart does not invalidate the link on your phone.
+    The file is gitignored — it is the password, and the repo is not."""
+    env = os.environ.get("STONKS_TOKEN", "").strip()
+    if env:
+        return env
+    try:
+        held = TOKEN_FILE.read_text().strip()
+        if held:
+            return held
+    except OSError:
+        pass
+    minted = secrets.token_urlsafe(18)
+    TOKEN_FILE.write_text(minted + "\n")
+    try:
+        TOKEN_FILE.chmod(0o600)
+    except OSError:
+        pass
+    return minted
+
+
+TOKEN = load_token()
 
 app = FastAPI(title="Stonks Tracker")
+# These payloads are long arrays of numbers and near-identical date strings,
+# which is close to the best case for gzip: a year of hourly bars goes from
+# ~64KB to ~8KB. Worth far more than server-side speed when the client is a
+# phone on the other end of a slow link.
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 
 # --------------------------------------------------------------------------
-# tiny TTL cache
+# authentication — one shared token
 # --------------------------------------------------------------------------
+# The port is reachable from the internet, and every endpoint reads or writes
+# your lists, so the whole app sits behind one token. It arrives as ?token= on
+# the first visit and is kept in a cookie after that, because the manifest's
+# start_url is "/" — a home-screen launch has no query string to carry it.
+#
+# Icons and the manifest stay open: they hold no data, and Chrome fetches the
+# manifest without credentials, so gating it would break installability for
+# nothing.
+OPEN_PATHS = {"/sw.js", "/healthz"}
+
+
+def authorised(request: Request) -> bool:
+    for candidate in (request.query_params.get("token"),
+                      request.headers.get("x-token"),
+                      request.cookies.get(COOKIE)):
+        if candidate and secrets.compare_digest(candidate, TOKEN):
+            return True
+    return False
+
+
+@app.middleware("http")
+async def require_token(request: Request, call_next):
+    path = request.url.path
+    if path in OPEN_PATHS or path.startswith("/static/"):
+        return await call_next(request)
+
+    if not authorised(request):
+        # A bare 401 on the page itself is friendlier than a blank screen, and
+        # tells a scanner nothing it could not already see.
+        if path == "/":
+            return PlainTextResponse(
+                "Stonks Tracker needs a token.\n\n"
+                "Open  http://<this-host>:8000/?token=YOUR_TOKEN  once; it is "
+                "remembered in a cookie after that.\n",
+                status_code=401)
+        return JSONResponse({"detail": "Bad or missing token"}, status_code=401)
+
+    # A token in the URL is a token in history, in logs and in a shared
+    # screenshot. Take it, set the cookie, and send the browser to a clean "/".
+    if path == "/" and request.query_params.get("token"):
+        redirect = RedirectResponse("/", status_code=303)
+        redirect.set_cookie(COOKIE, TOKEN, max_age=365 * 24 * 3600,
+                            httponly=True, samesite="lax", path="/")
+        return redirect
+
+    response = await call_next(request)
+    if path == "/" and not request.cookies.get(COOKIE):
+        response.set_cookie(COOKIE, TOKEN, max_age=365 * 24 * 3600,
+                            httponly=True, samesite="lax", path="/")
+    return response
+
+
+# --------------------------------------------------------------------------
+# TTL cache: memory in front, sqlite behind
+# --------------------------------------------------------------------------
+# Values are the JSON the endpoints return (dicts and strings), so they go to
+# disk as-is. One row per key; the memory dict is only a copy of what is on
+# disk, so a cold process reads through to it and warms itself up.
 _cache: dict[str, tuple[float, object]] = {}
 _lock = threading.Lock()
+_db = sqlite3.connect(CACHE_FILE, check_same_thread=False)
+_db.execute("CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, at REAL, value TEXT)")
+_db.commit()
+
+
+def _disk_get(key: str) -> tuple[float, object] | None:
+    row = _db.execute("SELECT at, value FROM cache WHERE key = ?", (key,)).fetchone()
+    if not row:
+        return None
+    try:
+        return row[0], json.loads(row[1])
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _disk_put(key: str, at: float, value) -> None:
+    _db.execute("INSERT OR REPLACE INTO cache (key, at, value) VALUES (?, ?, ?)",
+                (key, at, json.dumps(value)))
+    _db.commit()
+
+
+def _failed(value) -> bool:
+    return isinstance(value, dict) and bool(value.get("error"))
 
 
 def cached(key: str, ttl: int, produce):
     now = time.time()
     with _lock:
         hit = _cache.get(key)
-        if hit and now - hit[0] < ttl:
+        if hit is None:
+            hit = _disk_get(key)
+            if hit is not None:
+                _cache[key] = hit
+        if hit and now - hit[0] < (ERROR_TTL if _failed(hit[1]) else ttl):
             return hit[1]
     value = produce()
     with _lock:
         _cache[key] = (now, value)
+        _disk_put(key, now, value)
     return value
+
+
+def cached_at(key: str) -> float | None:
+    """When the value under `key` was fetched, if it is held."""
+    with _lock:
+        hit = _cache.get(key)
+    return hit[0] if hit else None
 
 
 def cached_many(items: list, key: str, ttl: int, produce) -> list:
@@ -106,6 +241,8 @@ def invalidate(prefix: str = "") -> None:
     with _lock:
         for k in [k for k in _cache if k.startswith(prefix)]:
             del _cache[k]
+        _db.execute("DELETE FROM cache WHERE substr(key, 1, ?) = ?", (len(prefix), prefix))
+        _db.commit()
 
 
 # --------------------------------------------------------------------------
@@ -258,9 +395,6 @@ def close_series(hist: pd.DataFrame) -> pd.Series:
     return hist["Close"].dropna()
 
 
-NAME_TTL = 86400  # names change far more rarely than prices
-
-
 def fetch_name(symbol: str) -> str:
     try:
         info = yf.Ticker(symbol).get_info()
@@ -281,6 +415,15 @@ def pct_change_since(closes: pd.Series, days: int) -> float | None:
     if base in (None, 0) or now is None:
         return None
     return (now - base) / base * 100.0
+
+
+def trim(values: list) -> list:
+    """Yahoo hands back full float64 repr — 71.58999633789062 is seventeen
+    characters to say 71.59. Eight significant figures is more than any of
+    these instruments quote to, and it is a third of the bytes on the wire.
+    Significant figures rather than decimal places, so a sub-cent instrument
+    does not get rounded to zero."""
+    return [None if v is None else float(f"{v:.8g}") for v in values]
 
 
 def downsample(values: list, target: int = 120) -> list:
@@ -353,11 +496,11 @@ def fetch_quote(symbol: str) -> dict:
         vals = [v for v in vals if v is not None]
         if price is not None and vals and vals[-1] != price:
             vals.append(price)
-        out["spark"] = downsample(vals)
+        out["spark"] = trim(downsample(vals))
         if len(closes):
             out["sparkStart"] = closes.index[0].strftime("%Y-%m-%d")
 
-        out["name"] = cached(f"n:{symbol}", NAME_TTL, lambda: fetch_name(symbol))
+        out["name"] = cached(f"n:{symbol}", CACHE_TTL, lambda: fetch_name(symbol))
     except Exception as exc:  # one bad symbol must not blank the page
         out["error"] = str(exc)[:200]
     return out
@@ -392,7 +535,7 @@ def fetch_history(symbol: str, period: str, granular: bool = False) -> dict:
         out["intraday"] = tried in INTRADAY
         fmt = "%Y-%m-%dT%H:%M" if out["intraday"] else "%Y-%m-%d"
         out["dates"] = [d.strftime(fmt) for d in closes.index]
-        out["close"] = [clean(v) for v in closes.tolist()]
+        out["close"] = trim([clean(v) for v in closes.tolist()])
     except Exception as exc:
         out["error"] = str(exc)[:200]
     return out
@@ -513,7 +656,7 @@ def add_symbol(list_id: str, body: SymbolIn):
     if symbol in entry["symbols"]:
         raise HTTPException(409, f"{symbol} is already in {entry['name']}")
 
-    probe = cached(f"q:{symbol}", QUOTE_TTL, lambda: fetch_quote(symbol))
+    probe = cached(f"q:{symbol}", CACHE_TTL, lambda: fetch_quote(symbol))
     if probe["price"] is None:
         raise HTTPException(404, f"No data for {symbol} — check the suffix (e.g. .AX for ASX)")
 
@@ -538,9 +681,13 @@ def remove_symbol(list_id: str, symbol: str):
 def quotes(list_id: str | None = None):
     lists = load_lists()
     entry = find_list(lists, list_id) if list_id else lists[0]
-    rows = cached_many(entry["symbols"], "q:{}", QUOTE_TTL, fetch_quote)
+    rows = cached_many(entry["symbols"], "q:{}", CACHE_TTL, fetch_quote)
+    # "as of" is when the oldest row was fetched, not when it was served —
+    # with a three-hour cache the two can be a long way apart.
+    ages = [t for t in (cached_at(f"q:{s}") for s in entry["symbols"]) if t]
+    as_of = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(min(ages))) if ages else None
     return {"listId": entry["id"], "name": entry["name"], "quotes": rows,
-            "slots": entry.get("slots", {}), "asOf": time.strftime("%Y-%m-%d %H:%M:%S")}
+            "slots": entry.get("slots", {}), "asOf": as_of}
 
 
 @app.get("/api/history")
@@ -549,8 +696,7 @@ def history(symbols: str, period: str = "1Y", granular: bool = False):
     if period not in PERIODS:
         raise HTTPException(400, f"period must be one of {', '.join(PERIODS)}")
     wanted = [s.strip() for s in (symbols or "").split(",") if s.strip()]
-    ttl = 90 if granular and DETAIL_PERIODS[period][1] in INTRADAY else HISTORY_TTL
-    series = cached_many(wanted, "h:{}:" + f"{period}:{granular}", ttl,
+    series = cached_many(wanted, "h:{}:" + f"{period}:{granular}", CACHE_TTL,
                          lambda s: fetch_history(s, period, granular))
     if not granular:
         series = align(series)
@@ -560,6 +706,13 @@ def history(symbols: str, period: str = "1Y", granular: bool = False):
 @app.post("/api/refresh")
 def refresh():
     invalidate()
+    return {"ok": True}
+
+
+@app.get("/healthz")
+def healthz():
+    """Unauthenticated on purpose: it says the process is up and nothing else.
+    service.sh and cron can watch it without holding the token."""
     return {"ok": True}
 
 

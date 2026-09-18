@@ -483,6 +483,26 @@ function axisDate(s, intraday, spanDays) {
 const dirClass = (v) => v == null ? "" : v >= 0 ? "up" : "down";
 const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
+/* A round trip is a round trip however fast the server answers: over a VPN the
+   3ms the server spends is rounding error next to the latency either side of
+   it. So a series the page has already pulled is never pulled again — held for
+   the same three hours the server holds it, cleared by Refresh. Concurrent
+   callers asking for the same URL share one request rather than racing. */
+const wire = new Map();          // url -> {at, value} | {at, promise}
+const WIRE_TTL = 3 * 3600 * 1000;
+const WIRE_MAX = 240;
+
+async function apiCached(path) {
+  const hit = wire.get(path);
+  if (hit && Date.now() - hit.at < WIRE_TTL) return hit.promise || hit.value;
+  const promise = api(path).then(
+    (value) => { wire.set(path, { at: Date.now(), value }); return value; },
+    (err) => { wire.delete(path); throw err; });
+  wire.set(path, { at: Date.now(), promise });
+  if (wire.size > WIRE_MAX) wire.delete(wire.keys().next().value);
+  return promise;
+}
+
 async function api(path, opts) {
   const r = await fetch(path, opts);
   if (!r.ok) {
@@ -578,6 +598,14 @@ async function switchTab(id) {
 
   renderTabs();
   $("#quotes").innerHTML = `<p class="loading">Loading ${esc(list ? list.name : "")}…</p>`;
+  // The old tab's charts are the wrong charts, not a stale version of the
+  // right ones, so they go now rather than sitting dimmed until the fetch
+  // lands. The detail header follows the new first symbol at once.
+  cmpSeries = []; detailSeries = []; detailMeta = {};
+  renderDetail();
+  $("#detail-host").innerHTML = `<p class="loading">Loading…</p>`;
+  $("#cmp-host").innerHTML = `<p class="loading">Loading…</p>`;
+  $("#cmp-legend").innerHTML = "";
   await Promise.all([loadQuotes(), loadHistory()]);
 }
 
@@ -930,53 +958,109 @@ async function loadLists() {
   renderTabs();
 }
 
+/* Two tab clicks in a row put two fetches in flight, and the slower one is not
+   always the later one. Each load takes a ticket; a response whose ticket has
+   been superseded is dropped, so the charts can never show the previous tab's
+   data under the current tab's name. */
+let quotesSeq = 0, historySeq = 0, detailSeq = 0;
+
 async function loadQuotes() {
   if (!state.activeId) { state.quotes = []; state.symbols = []; renderQuotes(); return; }
+  const seq = ++quotesSeq;
   const d = await api(`/api/quotes?list_id=${encodeURIComponent(state.activeId)}`);
+  if (seq !== quotesSeq) return;
   state.quotes = d.quotes;
   state.slots = d.slots || {};
   state.symbols = d.quotes.map(q => q.symbol);
   if (!state.selected || !state.symbols.includes(state.selected)) {
     state.selected = state.symbols[0] || null;
   }
-  $("#asof").textContent = "as of " + d.asOf;
+  $("#asof").textContent = d.asOf ? "as of " + d.asOf : "";
   const l = activeList();
   if (l) l.symbols = state.symbols;   // keep the tab count honest
   renderTabs();
   renderQuotes();
 }
 
-async function loadHistory() {
-  if (!state.symbols.length) {
-    cmpSeries = []; detailSeries = []; renderCompare(); renderDetail(); return;
-  }
-  const hosts = [$("#cmp-host"), $("#detail-host")];
-  hosts.forEach(h => h.classList.add("dim"));   // hold previous render, no skeleton flash
+/* The compare series depends on (symbols, period) and the detail series on
+   (selection, period), so a symbol click only invalidates the second one.
+   Loading them together made every click refetch the whole compare chart to
+   redraw it identically with a different line emphasised. */
+async function loadCompare() {
+  if (!state.symbols.length) { cmpSeries = []; renderCompare(); return; }
+  const seq = ++historySeq;
+  const host = $("#cmp-host");
+  host.classList.add("dim");            // hold the previous render, no skeleton flash
   try {
-    const [cmp, det] = await Promise.all([
-      api(`/api/history?symbols=${encodeURIComponent(state.symbols.join(","))}&period=${state.period}`),
-      state.selected
-        ? api(`/api/history?symbols=${encodeURIComponent(state.selected)}&period=${state.period}&granular=true`)
-        : Promise.resolve({ series: [] }),
-    ]);
+    const cmp = await apiCached(`/api/history?symbols=${encodeURIComponent(state.symbols.join(","))}&period=${state.period}`);
+    if (seq !== historySeq) return;
     cmpSeries = cmp.series.filter(s => s.close.some(v => v != null)).map(s => {
       const base = s.close.find(v => v != null) || 1;
       return { symbol: s.symbol, dates: s.dates, values: s.close.map(v => v == null ? null : (v / base) * 100) };
     });
+  } finally {
+    if (seq === historySeq) host.classList.remove("dim");
+  }
+  renderCompare();
+}
+
+async function loadDetail() {
+  if (!state.selected) { detailSeries = []; detailMeta = {}; renderDetail(); return; }
+  const seq = ++detailSeq, want = state.selected;
+  const host = $("#detail-host");
+  host.classList.add("dim");
+  try {
+    const det = await apiCached(`/api/history?symbols=${encodeURIComponent(want)}&period=${state.period}&granular=true`);
+    if (seq !== detailSeq) return;
     const d0 = det.series[0];
     detailMeta = d0 ? { interval: d0.interval, intraday: d0.intraday } : {};
     detailSeries = d0 && d0.close.length ? [{ symbol: d0.symbol, dates: d0.dates, values: d0.close }] : [];
   } finally {
-    hosts.forEach(h => h.classList.remove("dim"));
+    if (seq === detailSeq) host.classList.remove("dim");
   }
-  renderCompare(); renderDetail();
+  renderDetail();
+}
+
+async function loadHistory() {
+  if (!state.symbols.length) {
+    cmpSeries = []; detailSeries = []; renderCompare(); renderDetail(); return;
+  }
+  await Promise.all([loadCompare(), loadDetail()]);
+  prefetchDetails();
+}
+
+/* Once the tab is on screen, quietly pull the rest of its symbols into the
+   same client-side cache, one at a time so the fetches queue behind anything
+   the user actually asks for. A click on a prefetched symbol then costs no
+   request at all — which is the only thing that helps when the link, not the
+   server, is the slow part. */
+let prefetching = null;
+async function prefetchDetails() {
+  const token = {};
+  prefetching = token;
+  for (const sym of state.symbols) {
+    if (prefetching !== token) return;      // tab or period moved on
+    const url = `/api/history?symbols=${encodeURIComponent(sym)}&period=${state.period}&granular=true`;
+    if (wire.has(url)) continue;
+    try { await apiCached(url); }
+    catch (e) { /* a symbol that will not load is the click's problem, not ours */ }
+  }
 }
 
 function select(sym) {
+  if (sym === state.selected) return;
   state.selected = sym;
-  renderQuotes();
-  loadHistory();
+  // Selection is an attribute on two rows, not a new table: rebuilding it
+  // regenerates every inline SVG and re-binds every listener for nothing.
+  markSelected();
+  renderCompare();      // same data, different line emphasised — a re-render, not a fetch
+  loadDetail();
   try { $("#detail-host").scrollIntoView({ behavior: "smooth", block: "nearest" }); } catch (e) {}
+}
+
+function markSelected() {
+  $("#quotes").querySelectorAll("tbody tr").forEach(tr =>
+    tr.setAttribute("aria-selected", String(tr.dataset.sym === state.selected)));
 }
 
 async function moveSymbol(sym, delta) {
@@ -1043,7 +1127,11 @@ $("#addsym").addEventListener("keydown", (e) => { if (e.key === "Enter") addSymb
 
 $("#refresh").addEventListener("click", async () => {
   $("#refresh").disabled = true;
-  try { await api("/api/refresh", { method: "POST" }); await loadQuotes(); await loadHistory(); }
+  try {
+    await api("/api/refresh", { method: "POST" });
+    wire.clear();                 // the server just dropped its copy; drop ours
+    await loadQuotes(); await loadHistory();
+  }
   finally { $("#refresh").disabled = false; }
 });
 
