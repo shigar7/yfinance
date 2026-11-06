@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>IVV Prediction</title>
+<style>
+:root {
+  color-scheme: light;
+  --page:           #f9f9f7;
+  --surface-1:      #fcfcfb;
+  --text-primary:   #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted:     #6f6d68;
+  --gridline:       #e1e0d9;
+  --baseline:       #c3c2b7;
+  --reference:      #898781;
+  --border:         rgba(11,11,11,0.10);
+  --hover:          rgba(11,11,11,0.04);
+  --up:             #006300;
+  --down:           #d03b3b;
+  --warn-bg:        #fbf1dc;
+  --series-1:       #2a78d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --page:           #0d0d0d;
+    --surface-1:      #1a1a19;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #a09e97;
+    --gridline:       #2c2c2a;
+    --baseline:       #383835;
+    --reference:      #898781;
+    --border:         rgba(255,255,255,0.10);
+    --hover:          rgba(255,255,255,0.05);
+    --up:             #0ca30c;
+    --down:           #e66767;
+    --warn-bg:        #33290f;
+    --series-1:       #3987e5;
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--page); color: var(--text-primary); }
+body { font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; font-variant-numeric: tabular-nums; }
+main { max-width: 1040px; margin: 0 auto; padding: 28px 16px 64px; }
+h1 { font-size: 22px; font-weight: 600; margin: 0; }
+h2 { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
+.sub { color: var(--text-secondary); font-size: 13px; margin: 2px 0 16px; }
+.card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 20px; margin-top: 16px; }
+.hero { display: grid; grid-template-columns: minmax(220px, 1fr) 2fr; gap: 24px; }
+.hero .value { font-size: 44px; font-weight: 600; line-height: 1.1; letter-spacing: -0.02em; }
+.hero .label, .tile .label { font-size: 13px; color: var(--text-secondary); }
+.hero .delta { font-size: 14px; margin-top: 6px; }
+.up { color: var(--up); } .down { color: var(--down); }
+.notice { background: var(--warn-bg); border-radius: 8px; padding: 8px 12px; font-size: 13px; margin-top: 12px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th { text-align: left; font-weight: 500; color: var(--text-muted); }
+td, th { padding: 6px 8px; border-bottom: 1px solid var(--gridline); white-space: nowrap; }
+td.num, th.num { text-align: right; }
+td.when { color: var(--text-secondary); white-space: normal; }
+.formula { font-size: 13px; color: var(--text-secondary); margin-top: 12px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin: 16px 0; }
+.tile { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.tile .num { font-size: 20px; font-weight: 600; }
+.tile .hint { font-size: 12px; color: var(--text-muted); }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button { font: inherit; font-size: 13px; color: var(--text-secondary); background: none; border: 0; padding: 5px 12px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button[aria-pressed="true"] { background: var(--text-primary); color: var(--page); }
+.head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.chart { position: relative; max-width: 680px; margin: 0 auto; }
+svg { display: block; width: 100%; height: auto; touch-action: none; }
+svg text { font-size: 12px; fill: var(--text-muted); }
+svg .axis-title { fill: var(--text-secondary); }
+#tip { position: absolute; pointer-events: none; background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.12); display: none; width: 190px; }
+#tip strong { display: block; font-size: 13px; }
+#tip div { display: flex; justify-content: space-between; gap: 12px; color: var(--text-secondary); }
+#tip div b { color: var(--text-primary); font-weight: 600; }
+.reading { font-size: 13px; color: var(--text-secondary); margin: 12px 0 0; }
+details { margin-top: 16px; }
+summary { cursor: pointer; font-size: 13px; color: var(--text-secondary); }
+.scroll { overflow-x: auto; max-height: 420px; margin-top: 8px; }
+.scroll th { position: sticky; top: 0; background: var(--surface-1); }
+.error { color: var(--down); font-size: 14px; }
+@media (max-width: 640px) {
+  .hero { grid-template-columns: 1fr; gap: 16px; }
+  .hero .value { font-size: 38px; }
+  .card { padding: 16px; }
+  /* Input and value on one line, its timestamp under them: three columns don't fit. */
+  #today tr { display: grid; grid-template-columns: 1fr auto; border-bottom: 1px solid var(--gridline); padding: 4px 0; }
+  #today th:nth-child(3) { display: none; }
+  #today td, #today th { border: 0; padding: 2px 0; }
+  #today td.when { grid-column: 1 / -1; font-size: 12px; }
+  #today td.when:empty { display: none; }
+}
+</style>
+</head>
+<body>
+<main>
+  <h1>IVV Prediction</h1>
+  <p class="sub">An indicative IVV.AX open from the US IVV close, AUD/USD and the overnight S&amp;P 500 futures move.</p>
+
+  <section class="card" id="today" aria-live="polite"><p class="sub">Loading today's estimate…</p></section>
+
+  <section class="card">
+    <div class="head">
+      <div>
+        <h2>Predicted vs actual IVV.AX open</h2>
+        <p class="sub" id="bt-range">Loading…</p>
+      </div>
+      <div class="seg" id="windows" role="group" aria-label="Backtest window"></div>
+    </div>
+    <div class="tiles" id="tiles"></div>
+    <div class="chart" id="chart"><div id="tip"></div></div>
+    <p class="reading" id="reading"></p>
+    <details>
+      <summary>Show every session as a table</summary>
+      <div class="scroll"><table id="rows"></table></div>
+    </details>
+    <p class="formula">Backtest prediction = US IVV close ÷ AUD/USD ÷ 15, with no futures adjustment. Each ASX open is matched by timestamp to the latest US close before it. FX is the hourly AUDUSD=X bar ending at 16:00 ET. Prices are as traded, not adjusted for dividends. All data is from Yahoo Finance.</p>
+  </section>
+</main>
+<script>
+// Built from the page's own path, so it works behind any prefix, with or without
+// a trailing slash.
+const BASE = location.pathname.replace(/\/?$/, "/");
+const WINDOWS = ["1M", "3M", "6M", "1Y", "ALL"];
+const SVG_NS = "http://www.w3.org/2000/svg";
+let current = "1Y", shown = null;
+
+async function api(path) {
+  const r = await fetch(BASE + path, { cache: "no-store" });
+  if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
+  return r.json();
+}
+
+function el(tag, attrs = {}, ...kids) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) k === "class" ? node.className = v : node.setAttribute(k, v);
+  for (const kid of kids) node.append(kid);
+  return node;
+}
+const aud = v => `A$${v.toFixed(2)}`;
+const signed = (v, digits = 2) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(digits)}`;
+
+function stamp(iso, zone = "Australia/Sydney") {
+  const us = zone === "America/New_York";
+  const text = new Intl.DateTimeFormat("en-AU", { timeZone: zone, weekday: "short", day: "numeric", month: "short",
+    hour: "numeric", minute: "2-digit", ...(us ? {} : { timeZoneName: "short" }) }).format(new Date(iso));
+  return us ? `${text} ET` : text;
+}
+function dayName(iso) {
+  return new Intl.DateTimeFormat("en-AU", { timeZone: "Australia/Sydney", weekday: "long", day: "numeric", month: "long" }).format(new Date(iso));
+}
+
+function renderToday(d) {
+  const root = document.getElementById("today");
+  root.replaceChildren();
+
+  const change = d.estimate - d.asx.last_close, pct = change / d.asx.last_close * 100;
+  const left = el("div", {},
+    el("div", { class: "label" }, `Indicative open, ${dayName(d.target_open)}`),
+    el("div", { class: "value" }, aud(d.estimate)),
+    el("div", { class: `delta ${change >= 0 ? "up" : "down"}` },
+       `${signed(change)} (${signed(pct)}%) vs last close`),
+    el("div", { class: "label" }, `Last ASX close ${aud(d.asx.last_close)} on ${d.asx.last_close_date}`));
+  if (d.asx.today_open) left.append(el("div", { class: "label" }, `Today's actual open was ${aud(d.asx.today_open.price)}`));
+
+  const table = el("table");
+  table.append(el("tr", {}, el("th", {}, "Input"), el("th", { class: "num" }, "Value"), el("th", {}, "As of")));
+  const row = (name, value, when) => table.append(el("tr", {}, el("td", {}, name), el("td", { class: "num" }, value), el("td", { class: "when" }, when)));
+  row(d.us.session_open ? "IVV live (US session open)" : "IVV US close", `$${d.us.price.toFixed(2)}`, stamp(d.us.at, "America/New_York"));
+  if (d.es) {
+    row("ES=F at that time", d.es.ref.toFixed(2), stamp(d.es.ref_at, "America/New_York"));
+    row("ES=F latest", `${d.es.now.toFixed(2)} (${signed(d.es.move * 100)}%)`, stamp(d.es.now_at, "America/New_York"));
+  } else {
+    row("ES=F", "unavailable", "no bar at the reference time, so no futures adjustment");
+  }
+  row("AUD/USD latest", d.fx.aud_usd.toFixed(4), stamp(d.fx.at));
+  row("Units per US share", String(d.units_per_us_share), "see median implied ratio below");
+  row("Before futures", aud(d.base_no_es), "");
+
+  root.append(el("div", { class: "hero" }, left, el("div", {}, table)));
+
+  const notices = [];
+  if (d.us.session_open) notices.push("The US session is still open, so this uses IVV's live price rather than a close, and it will move until 4pm New York.");
+  else if (d.more_us_sessions_before_open) notices.push(`Another US session is due before this ASX open, so this estimate is early and will change. It uses the ${stamp(d.us.at, "America/New_York")} close.`);
+  for (const text of notices) root.append(el("div", { class: "notice" }, text));
+  root.append(el("p", { class: "formula" }, "Estimate = IVV ÷ AUD/USD ÷ 15 × (1 + ES move since that IVV price). US and ASX holidays aren't checked when working out the next open."));
+}
+
+function tile(label, value, hint) {
+  return el("div", { class: "tile" }, el("div", { class: "label" }, label), el("div", { class: "num" }, value), el("div", { class: "hint" }, hint));
+}
+
+function renderMetrics(d) {
+  const m = d.metrics;
+  document.getElementById("bt-range").textContent = `${m.n} ASX opens, ${d.from} to ${d.to}`;
+  document.getElementById("tiles").replaceChildren(
+    tile("Mean abs error", aud(m.mae), `${m.mae_pct.toFixed(2)}% of price`),
+    tile("RMSE", aud(m.rmse), `worst miss ${aud(m.max_abs_error)}`),
+    tile("Bias", `${signed(m.bias)}`, m.bias >= 0 ? "predicts too high" : "predicts too low"),
+    tile("r", m.r.toFixed(3), "on price levels"),
+    tile("R²", m.r2.toFixed(3), "on price levels"),
+    tile("R² on the gap", m.gap_r2.toFixed(3), "open vs prior ASX close"));
+  document.getElementById("reading").textContent =
+    `Prices trend together over months, which lifts r and R² for any model, so the gap figure is the fairer test. ` +
+    `Simply using the prior ASX close would miss by ${aud(m.naive_mae)} on average. ` +
+    `The median implied units per US share is ${m.median_implied_ratio.toFixed(2)}. ` +
+    `${m.stale_us_days} opens followed a US holiday and use an older close.`;
+}
+
+function renderRows(rows) {
+  const table = document.getElementById("rows");
+  table.replaceChildren(el("tr", {},
+    el("th", {}, "ASX open"), el("th", {}, "US close date"), el("th", { class: "num" }, "IVV US"), el("th", { class: "num" }, "AUD/USD"),
+    el("th", { class: "num" }, "Predicted"), el("th", { class: "num" }, "Actual"), el("th", { class: "num" }, "Error")));
+  for (const r of [...rows].reverse()) {
+    table.append(el("tr", {},
+      el("td", {}, r.asx_date), el("td", {}, r.us_date + (r.stale_us ? " (US holiday)" : "")),
+      el("td", { class: "num" }, r.us_close.toFixed(2)), el("td", { class: "num" }, r.aud_usd.toFixed(4)),
+      el("td", { class: "num" }, r.predicted.toFixed(2)), el("td", { class: "num" }, r.open.toFixed(2)),
+      el("td", { class: "num" }, signed(r.error))));
+  }
+}
+
+function svgEl(tag, attrs, text) {
+  const node = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function niceStep(span) {
+  const raw = span / 6, mag = 10 ** Math.floor(Math.log10(raw));
+  return [1, 2, 5, 10].map(s => s * mag).find(s => s >= raw);
+}
+
+function renderChart(d) {
+  const box = document.getElementById("chart");
+  const tip = document.getElementById("tip");
+  box.querySelector("svg")?.remove();
+  tip.style.display = "none";
+
+  const W = Math.max(320, box.clientWidth), M = { l: 54, r: 14, t: 12, b: 46 };
+  const side = W - M.l - M.r, H = side + M.t + M.b;
+  const values = d.rows.flatMap(r => [r.predicted, r.open]);
+  const pad = Math.max(0.25, (Math.max(...values) - Math.min(...values)) * 0.04);
+  const lo = Math.min(...values) - pad, hi = Math.max(...values) + pad;
+  // One scale on both axes, so distance from the diagonal is the error itself.
+  const X = v => M.l + (v - lo) / (hi - lo) * side;
+  const Y = v => M.t + side - (v - lo) / (hi - lo) * side;
+
+  const svg = svgEl("svg", { viewBox: `0 0 ${W} ${H}`, role: "img",
+    "aria-label": `Scatter of predicted against actual IVV.AX open, ${d.metrics.n} sessions, R squared ${d.metrics.r2}. The table below has every value.` });
+  const step = niceStep(hi - lo);
+  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) {
+    svg.append(svgEl("line", { x1: M.l, x2: M.l + side, y1: Y(v), y2: Y(v), stroke: "var(--gridline)", "stroke-width": 1 }));
+    svg.append(svgEl("line", { y1: M.t, y2: M.t + side, x1: X(v), x2: X(v), stroke: "var(--gridline)", "stroke-width": 1 }));
+    svg.append(svgEl("text", { x: M.l - 8, y: Y(v) + 4, "text-anchor": "end" }, `$${v.toFixed(step < 1 ? 1 : 0)}`));
+    svg.append(svgEl("text", { x: X(v), y: M.t + side + 18, "text-anchor": "middle" }, `$${v.toFixed(step < 1 ? 1 : 0)}`));
+  }
+  svg.append(svgEl("line", { x1: M.l, x2: M.l + side, y1: M.t + side, y2: M.t + side, stroke: "var(--baseline)", "stroke-width": 1 }));
+  svg.append(svgEl("line", { x1: X(lo), y1: Y(lo), x2: X(hi), y2: Y(hi), stroke: "var(--reference)", "stroke-width": 1 }));
+  svg.append(svgEl("text", { x: M.l + side - 6, y: M.t + side - 10, "text-anchor": "end", class: "axis-title" }, "Diagonal line: prediction = actual"));
+  svg.append(svgEl("text", { x: M.l + side / 2, y: H - 8, "text-anchor": "middle", class: "axis-title" }, "Predicted open (A$)"));
+  svg.append(svgEl("text", { transform: `translate(14 ${M.t + side / 2}) rotate(-90)`, "text-anchor": "middle", class: "axis-title" }, "Actual open (A$)"));
+
+  const points = d.rows.map(r => ({ r, x: X(r.predicted), y: Y(r.open) }));
+  for (const p of points) {
+    svg.append(svgEl("circle", { cx: p.x, cy: p.y, r: 4, fill: "var(--series-1)", stroke: "var(--surface-1)", "stroke-width": 2, "paint-order": "stroke" }));
+  }
+  const focus = svgEl("circle", { r: 6, fill: "var(--series-1)", stroke: "var(--text-primary)", "stroke-width": 2, style: "display:none" });
+  svg.append(focus);
+  box.append(svg);
+
+  // Nearest point rather than a target per dot: they overlap too much for that.
+  function move(event) {
+    const rect = svg.getBoundingClientRect(), scale = W / rect.width;
+    const px = (event.clientX - rect.left) * scale, py = (event.clientY - rect.top) * scale;
+    let best = null, dist = 24 * 24;
+    for (const p of points) {
+      const dd = (p.x - px) ** 2 + (p.y - py) ** 2;
+      if (dd < dist) { dist = dd; best = p; }
+    }
+    if (!best) { leave(); return; }
+    focus.setAttribute("cx", best.x); focus.setAttribute("cy", best.y); focus.style.display = "";
+    const line = (label, value) => el("div", {}, label, el("b", {}, value));
+    tip.replaceChildren(el("strong", {}, `ASX open ${best.r.asx_date}`),
+      line("Predicted", aud(best.r.predicted)), line("Actual", aud(best.r.open)), line("Error", signed(best.r.error)),
+      line("IVV US", `$${best.r.us_close.toFixed(2)}`), line("US close", best.r.us_date), line("AUD/USD", best.r.aud_usd.toFixed(4)));
+    tip.style.display = "block";
+    const shownX = best.x / scale, shownY = best.y / scale;
+    tip.style.left = `${shownX + 210 > rect.width ? shownX - 204 : shownX + 14}px`;
+    tip.style.top = `${Math.max(0, Math.min(shownY - 40, rect.height - 150))}px`;
+  }
+  function leave() { tip.style.display = "none"; focus.style.display = "none"; }
+  svg.addEventListener("pointermove", move);
+  svg.addEventListener("pointerdown", move);
+  // A finger lifting also fires pointerleave, which would hide the tooltip it just asked for.
+  svg.addEventListener("pointerleave", event => { if (event.pointerType === "mouse") leave(); });
+}
+
+async function loadBacktest(window) {
+  current = window;
+  for (const b of document.querySelectorAll("#windows button")) b.setAttribute("aria-pressed", b.textContent === window);
+  try {
+    const d = await api(`api/backtest?window=${window}`);
+    if (current !== window) return;      // a newer click won
+    shown = d;
+    renderMetrics(d); renderChart(d); renderRows(d.rows);
+  } catch (e) {
+    document.getElementById("bt-range").replaceChildren(el("span", { class: "error" }, `Couldn't load the backtest. ${e.message}`));
+  }
+}
+
+async function loadToday() {
+  try { renderToday(await api("api/today")); }
+  catch (e) { document.getElementById("today").replaceChildren(el("p", { class: "error" }, `Couldn't load today's estimate. ${e.message}`)); }
+}
+
+for (const w of WINDOWS) {
+  const b = el("button", { type: "button", "aria-pressed": "false" }, w);
+  b.addEventListener("click", () => loadBacktest(w));
+  document.getElementById("windows").append(b);
+}
+let resizeTimer;
+addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => shown && renderChart(shown), 120); });
+
+loadToday();
+loadBacktest(current);
+setInterval(loadToday, 60000);
+</script>
+</body>
+</html>
