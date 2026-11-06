@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Stonks Tracker</title>
-<link rel="manifest" href="/static/manifest.webmanifest">
-<link rel="icon" href="/static/icon-192.png" type="image/png">
-<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<link rel="manifest" href="static/manifest.webmanifest">
+<link rel="icon" href="static/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="static/apple-touch-icon.png">
 <meta name="theme-color" content="#f9f9f7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
 <!-- iOS ignores the manifest's display mode; these are how it opens chrome-less -->
@@ -84,6 +84,8 @@ header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; paddi
 h1 { font-size: 20px; font-weight: 650; margin: 0; letter-spacing: -0.01em; }
 .asof { color: var(--text-muted); font-size: 12px; }
 .spacer { flex: 1 1 auto; }
+.navlink { color: var(--text-muted); font-size: 13px; text-decoration: none; }
+.navlink:hover { color: var(--text-primary); }
 
 button {
   font: inherit; color: var(--text-secondary); background: var(--surface-1);
@@ -194,9 +196,26 @@ input[type=text]:focus { outline: 2px solid var(--series-1); outline-offset: 1px
 .msg.err { color: var(--down); }
 
 .chart-host { position: relative; width: 100%; }
+.axis-hit { cursor: pointer; }
+.alert-label { cursor: pointer; }
+.alert-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.alert-chips:empty { display: none; }
+.alert-chip { font-size: 13px; font-variant-numeric: tabular-nums; }
+#alert-dialog { background: var(--surface-1); color: var(--text-primary); border: 1px solid var(--border); border-radius: 12px; padding: 20px; width: min(340px, calc(100vw - 32px)); }
+#alert-dialog::backdrop { background: rgba(0,0,0,0.4); }
+#alert-dialog h3 { margin: 0 0 4px; font-size: 16px; }
+#alert-dialog .now, #alert-dialog .hint { margin: 0; font-size: 13px; color: var(--text-muted); }
+#alert-dialog .diff { margin: 0 0 10px; font-size: 14px; font-weight: 560; font-variant-numeric: tabular-nums; }
+#alert-dialog .diff:empty { display: none; }
+#alert-dialog .fields { display: flex; gap: 8px; margin: 14px 0 10px; }
+#alert-dialog select, #alert-dialog input { min-width: 0; flex: 1; padding: 8px 10px; font: inherit; color: inherit; background: var(--page); border: 1px solid var(--border); border-radius: 8px; }
+#alert-dialog .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+#alert-dialog .error { margin: 8px 0 0; font-size: 13px; color: var(--down); }
+#alert-dialog .error:empty { display: none; }
 svg { display: block; width: 100%; overflow: visible; }
 /* pan-y: a vertical swipe scrolls the page, a horizontal drag scrubs the chart */
 svg .hit { touch-action: pan-y; }
+svg .hit.measure { cursor: crosshair; }
 .tip {
   position: absolute; pointer-events: none; z-index: 5;
   background: var(--surface-1); border: 1px solid var(--border);
@@ -370,6 +389,7 @@ td.chart-cell { padding-right: 2px; }
   <h1>Stonks Tracker</h1>
   <span class="asof" id="asof"></span>
   <span class="spacer"></span>
+  <a class="navlink" href="today_stonks">Short term &rarr;</a>
   <button id="refresh">Refresh</button>
   <button id="theme" title="Toggle light / dark">Theme</button>
 </header>
@@ -409,7 +429,30 @@ td.chart-cell { padding-right: 2px; }
   </div>
   <div class="hero" id="detail-hero"></div>
   <div class="chart-host" id="detail-host"><p class="loading">Loading…</p></div>
+  <div class="alert-chips" id="detail-alerts"></div>
+  <p class="note">Drag across the chart to see the change between two points — two fingers on a phone. Click a price on the left axis to set a phone alert.</p>
 </section>
+
+<dialog id="alert-dialog">
+  <form id="alert-form">
+    <h3 id="alert-title">Alert</h3>
+    <p class="now" id="alert-now"></p>
+    <div class="fields">
+      <select id="alert-direction" aria-label="Direction">
+        <option value="above">Above</option>
+        <option value="below">Below</option>
+      </select>
+      <input id="alert-price" type="number" step="any" min="0" inputmode="decimal" aria-label="Price" required>
+    </div>
+    <p class="diff" id="alert-diff"></p>
+    <p class="hint">Checked daily at 5pm Sydney time, using the price then. Removed once it fires.</p>
+    <p class="error" id="alert-error" role="alert"></p>
+    <div class="actions">
+      <button type="button" id="alert-cancel">Cancel</button>
+      <button type="submit" id="alert-save">Set alert</button>
+    </div>
+  </form>
+</dialog>
 
 <section class="card">
   <div class="card-head">
@@ -442,6 +485,7 @@ const state = {
   quotes: [],
   slots: {},            // symbol -> pinned colour slot
   selected: null,
+  alerts: [],
   hidden: new Set(),    // legend toggles — must never repaint survivors
 };
 
@@ -613,7 +657,7 @@ async function newTab() {
   const name = prompt("Name the new list", "");
   if (name === null || !name.trim()) return;
   try {
-    const d = await api("/api/lists", {
+    const d = await api("api/lists", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: name.trim() }),
     });
@@ -628,7 +672,7 @@ async function deleteTab(id) {
   if (!l) return;
   if (!confirm(`Delete the list "${l.name}" and its ${l.symbols.length} symbol(s)?`)) return;
   try {
-    const d = await api(`/api/lists/${id}`, { method: "DELETE" });
+    const d = await api(`api/lists/${id}`, { method: "DELETE" });
     state.lists = d.lists;
     state.activeId = null;
     await switchTab(state.lists[0].id);
@@ -693,7 +737,7 @@ function renderQuotes() {
 /* ------------------------------------------------------- line chart core
    Shared by the detail chart (1 series) and the compare chart (n series). */
 function lineChart(host, opts) {
-  const { series, yFmt, tipFmt, baseline100, intraday, highRef, emphasis } = opts;
+  const { series, yFmt, tipFmt, baseline100, intraday, highRef, emphasis, measure, alerts, onAxisClick, onAlertRemove } = opts;
   const live = series.filter(s => s.values.some(v => v != null) && !state.hidden.has(s.symbol));
   if (!live.length) { host.innerHTML = `<p class="loading">No data for this period.</p>`; return; }
 
@@ -821,11 +865,30 @@ function lineChart(host, opts) {
       fill-opacity="${faded(e.symbol) ? 0.5 : 1}">${esc(narrow ? e.symbol.slice(0, 6) : e.symbol)}</text>`));
   }
 
+  // drag-to-measure: the shaded span between the two ends, and a dot on each
+  // series where the drag started (the crosshair's own dots mark where it is now)
+  P.push(`<rect class="band" y="${M.t}" height="${ih}" fill="var(--text-primary)" fill-opacity="0.07" style="display:none"/>`);
+  P.push(`<g class="anchor" style="display:none">
+      <line stroke="var(--baseline)" stroke-width="1"/>
+      ${live.map(s => `<circle r="4.5" fill="${colorOf(s.symbol)}" stroke="var(--surface-1)" stroke-width="2"/>`).join("")}
+    </g>`);
   P.push(`<g class="cross" style="display:none">
       <line stroke="var(--baseline)" stroke-width="1"/>
       ${live.map(s => `<circle r="4.5" fill="${colorOf(s.symbol)}" stroke="var(--surface-1)" stroke-width="2"/>`).join("")}
     </g>`);
-  P.push(`<rect x="${M.l}" y="${M.t}" width="${iw}" height="${ih}" fill="transparent" class="hit"/>`);
+  P.push(`<rect x="${M.l}" y="${M.t}" width="${iw}" height="${ih}" fill="transparent" class="hit${measure ? " measure" : ""}"/>`);
+  // Drawn after the hit area so the labels can take clicks. The lines themselves
+  // ignore the pointer, so the crosshair still works across them. An alert off
+  // this period's scale is skipped here; its chip below the chart still shows it.
+  (alerts || []).filter(a => a.price >= lo && a.price <= hi).forEach(a => {
+    const y = Y(a.price).toFixed(1), col = a.direction === "above" ? "var(--up)" : "var(--down)";
+    P.push(`<line x1="${M.l}" x2="${M.l + iw}" y1="${y}" y2="${y}" stroke="${col}" stroke-width="1.5" stroke-dasharray="4 4" pointer-events="none"/>`);
+    P.push(`<text class="alert-label" data-id="${esc(a.id)}" x="${M.l + iw - 4}" y="${(Y(a.price) - 5).toFixed(1)}" text-anchor="end" font-size="${fs}" font-weight="600" fill="${col}" style="font-variant-numeric:tabular-nums"><title>Remove this alert</title>${a.direction} ${yFmt(a.price)} ×</text>`);
+  });
+  if (onAxisClick) {
+    P.push(`<line class="axis-guide" x1="${M.l}" x2="${M.l + iw}" stroke="var(--text-muted)" stroke-dasharray="2 3" pointer-events="none" style="display:none"/>`);
+    P.push(`<rect class="axis-hit" x="0" y="${M.t}" width="${M.l}" height="${ih}" fill="transparent"><title>Click a price to set an alert</title></rect>`);
+  }
   P.push(`</svg><div class="tip"></div>`);
   host.innerHTML = P.join("");
 
@@ -833,25 +896,48 @@ function lineChart(host, opts) {
   const cross = svg.querySelector(".cross"), vline = cross.querySelector("line");
   const dots = [...cross.querySelectorAll("circle")];
 
-  const move = (ev) => {
+  svg.querySelectorAll(".alert-label").forEach(el =>
+    el.addEventListener("click", () => onAlertRemove(el.dataset.id)));
+  const axisHit = svg.querySelector(".axis-hit");
+  if (axisHit) {
+    const guide = svg.querySelector(".axis-guide");
+    const cyAt = (clientY) => {
+      const r = svg.getBoundingClientRect();
+      return Math.max(M.t, Math.min(M.t + ih, (clientY - r.top) * (W / r.width)));
+    };
+    axisHit.addEventListener("mousemove", (ev) => {
+      const cy = cyAt(ev.clientY);
+      guide.setAttribute("y1", cy); guide.setAttribute("y2", cy);
+      guide.style.display = "";
+    });
+    axisHit.addEventListener("mouseleave", () => { guide.style.display = "none"; });
+    axisHit.addEventListener("click", (ev) => {
+      onAxisClick(lo + ((M.t + ih - cyAt(ev.clientY)) / ih) * (hi - lo));
+    });
+  }
+
+  const band = svg.querySelector(".band"), anchor = svg.querySelector(".anchor");
+  const aline = anchor.querySelector("line"), adots = [...anchor.querySelectorAll("circle")];
+
+  const idxAt = (clientX) => {
     const r = svg.getBoundingClientRect();
-    const cx = ((ev.touches ? ev.touches[0].clientX : ev.clientX) - r.left) * (W / r.width);
-    let i = Math.round(((cx - M.l) / iw) * (n - 1));
-    i = Math.max(0, Math.min(n - 1, i));
-    cross.style.display = "";
-    vline.setAttribute("x1", X(i)); vline.setAttribute("x2", X(i));
-    vline.setAttribute("y1", M.t); vline.setAttribute("y2", M.t + ih);
-    const rows = [];
+    const cx = (clientX - r.left) * (W / r.width);
+    return Math.max(0, Math.min(n - 1, Math.round(((cx - M.l) / iw) * (n - 1))));
+  };
+  const place = (g, line, ds, i) => {
+    g.style.display = "";
+    line.setAttribute("x1", X(i)); line.setAttribute("x2", X(i));
+    line.setAttribute("y1", M.t); line.setAttribute("y2", M.t + ih);
     live.forEach((s, k) => {
       const v = s.values[i];
-      if (v == null) { dots[k].style.display = "none"; return; }
-      dots[k].style.display = "";
-      dots[k].setAttribute("cx", X(i)); dots[k].setAttribute("cy", Y(v));
-      rows.push(`<div class="t-row"><span class="t-nm">
-        <span class="swatch" style="background:${colorOf(s.symbol)}"></span>${esc(s.symbol)}</span>
-        <span class="t-v">${tipFmt(v, s, i)}</span></div>`);
+      if (v == null) { ds[k].style.display = "none"; return; }
+      ds[k].style.display = "";
+      ds[k].setAttribute("cx", X(i)); ds[k].setAttribute("cy", Y(v));
     });
-    tip.innerHTML = `<div class="t-date">${esc(fmtDate(dates[i]))}</div>${rows.join("")}`;
+  };
+  const showTip = (html, i) => {
+    const r = svg.getBoundingClientRect();
+    tip.innerHTML = html;
     tip.classList.add("on");
     const scale = r.width / W;
     let left = X(i) * scale + 14;
@@ -859,17 +945,135 @@ function lineChart(host, opts) {
     tip.style.left = Math.max(0, left) + "px";
     tip.style.top = (M.t * scale + 6) + "px";
   };
-  const leave = () => { cross.style.display = "none"; tip.classList.remove("on"); };
+
+  const hover = (i) => {
+    band.style.display = "none"; anchor.style.display = "none";
+    place(cross, vline, dots, i);
+    const rows = [];
+    live.forEach((s) => {
+      const v = s.values[i];
+      if (v == null) return;
+      rows.push(`<div class="t-row"><span class="t-nm">
+        <span class="swatch" style="background:${colorOf(s.symbol)}"></span>${esc(s.symbol)}</span>
+        <span class="t-v">${tipFmt(v, s, i)}</span></div>`);
+    });
+    showTip(`<div class="t-date">${esc(fmtDate(dates[i]))}</div>${rows.join("")}`, i);
+  };
+
+  // Change between two points in time: the earlier one is the base, whichever
+  // way the drag went.
+  const span = (i0, i1) => {
+    const a = Math.min(i0, i1), b = Math.max(i0, i1);
+    band.style.display = "";
+    band.setAttribute("x", X(a)); band.setAttribute("width", Math.max(X(b) - X(a), 1));
+    place(anchor, aline, adots, i0);
+    place(cross, vline, dots, i1);
+    const rows = [];
+    live.forEach((s) => {
+      const v0 = s.values[a], v1 = s.values[b];
+      if (v0 == null || v1 == null) return;
+      const d = v1 - v0;
+      rows.push(`<div class="t-row"><span class="t-nm">
+        <span class="swatch" style="background:${colorOf(s.symbol)}"></span>${esc(s.symbol)}</span>
+        <span class="t-v">${yFmt(v0)} → ${yFmt(v1)}</span></div>
+        <div class="t-row"><span></span><span class="t-v ${dirClass(d)}">${fmtChg(d)} (${fmtPct(d / v0 * 100)})</span></div>`);
+    });
+    showTip(`<div class="t-date">${esc(fmtDate(dates[a]))} → ${esc(fmtDate(dates[b]))}</div>${rows.join("")}`, i1);
+  };
+
+  const leave = () => {
+    cross.style.display = "none"; anchor.style.display = "none"; band.style.display = "none";
+    tip.classList.remove("on");
+  };
+
+  // Mouse: press and drag across the chart to measure between the two ends.
+  // The result stays up after release until the next click or the pointer
+  // leaves; a click without a drag just goes back to hovering.
+  let start = null, pinned = false;
   const hit = svg.querySelector(".hit");
-  hit.addEventListener("mousemove", move);
-  hit.addEventListener("mouseleave", leave);
+  hit.addEventListener("mousedown", (ev) => {
+    if (!measure || ev.button !== 0) return;
+    ev.preventDefault();                        // no text selection while dragging
+    start = idxAt(ev.clientX); pinned = false;
+    hover(start);
+  });
+  const release = (i) => {
+    pinned = i !== start;
+    if (!pinned) hover(start);
+    start = null;
+  };
+  hit.addEventListener("mousemove", (ev) => {
+    const i = idxAt(ev.clientX);
+    // button let go outside the chart: the drag ended where it left off
+    if (start !== null && !(ev.buttons & 1)) { release(i); if (pinned) return; }
+    if (start !== null) span(start, i);
+    else if (!pinned) hover(i);
+  });
+  hit.addEventListener("mouseup", (ev) => { if (start !== null) release(idxAt(ev.clientX)); });
+  hit.addEventListener("mouseleave", () => { if (start === null) { pinned = false; leave(); } });
+
   // touch-action:pan-y (CSS) already routes vertical swipes to the page, so
   // these can stay passive. preventDefault() here used to pin the finger: on a
   // phone the chart is most of the screen, and you could not scroll past it.
-  hit.addEventListener("touchstart", move, { passive: true });
-  hit.addEventListener("touchmove", move, { passive: true });
-  hit.addEventListener("touchend", leave);
+  // One finger scrubs; two fingers measure between them.
+  const touch = (ev) => {
+    const t = ev.touches;
+    if (measure && t.length >= 2) {
+      const i0 = idxAt(t[0].clientX), i1 = idxAt(t[1].clientX);
+      span(Math.min(i0, i1), Math.max(i0, i1));
+    } else hover(idxAt(t[0].clientX));
+  };
+  hit.addEventListener("touchstart", touch, { passive: true });
+  hit.addEventListener("touchmove", touch, { passive: true });
+  hit.addEventListener("touchend", (ev) => { if (!ev.touches.length) leave(); });
 }
+
+async function loadAlerts() {
+  try { state.alerts = (await api("api/alerts")).alerts; renderDetail(); }
+  catch (e) { /* the charts still work; alerts just don't show */ }
+}
+
+async function removeAlert(id) {
+  state.alerts = (await api(`api/alerts/${encodeURIComponent(id)}`, { method: "DELETE" })).alerts;
+  renderDetail();
+}
+
+function showAlertDiff() {
+  const q = state.quotes.find(x => x.symbol === state.selected);
+  const price = Number($("#alert-price").value), el = $("#alert-diff");
+  if (!q || q.price == null || !(price > 0)) { el.textContent = ""; return; }
+  const gap = price - q.price;
+  // Not gap === 0: Yahoo's 70.96 is really 70.95999...
+  el.textContent = Math.abs(gap / q.price) < 5e-5 ? "At the current price"
+    : `${fmtPrice(Math.abs(gap))} (${Math.abs(gap / q.price * 100).toFixed(2)}%) ${gap > 0 ? "above" : "below"} the current price`;
+}
+
+function openAlertDialog(price) {
+  const q = state.quotes.find(x => x.symbol === state.selected);
+  $("#alert-title").textContent = `Alert for ${state.selected}`;
+  $("#alert-now").textContent = q && q.price != null ? `Now ${fmtPrice(q.price)} ${q.currency || ""}` : "";
+  $("#alert-price").value = price.toFixed(price >= 1 ? 2 : 4);
+  $("#alert-direction").value = q && q.price != null && price < q.price ? "below" : "above";
+  $("#alert-error").textContent = "";
+  showAlertDiff();
+  $("#alert-dialog").showModal();
+}
+
+$("#alert-price").addEventListener("input", showAlertDiff);
+$("#alert-cancel").addEventListener("click", () => $("#alert-dialog").close());
+$("#alert-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  try {
+    state.alerts = (await api("api/alerts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol: state.selected, direction: $("#alert-direction").value,
+                             price: Number($("#alert-price").value) }),
+    })).alerts;
+    $("#alert-dialog").close();
+    renderDetail();
+  } catch (e) { $("#alert-error").textContent = e.message; }
+});
 
 function fmtFromHigh(v, high) {
   if (!high) return "";
@@ -904,6 +1108,14 @@ function renderDetail() {
     ${fromHigh != null ? `<span class="delta ${dirClass(fromHigh)}">${fmtPct(fromHigh)} from ${esc(state.period)} high</span>` : ""}
     <span class="meta">${esc(q.currency || "")} · prev close ${fmtPrice(q.prevClose)}</span>` : "";
 
+  const alerts = state.alerts.filter(a => a.symbol === state.selected);
+  $("#detail-alerts").innerHTML = alerts.map(a => `
+    <button class="alert-chip" data-id="${esc(a.id)}" aria-label="Remove alert: ${a.direction} ${esc(fmtPrice(a.price))}">
+      <span class="${a.direction === "above" ? "up" : "down"}">${a.direction === "above" ? "Above" : "Below"}</span> ${esc(fmtPrice(a.price))} ×
+    </button>`).join("");
+  $("#detail-alerts").querySelectorAll("button").forEach(b =>
+    b.addEventListener("click", () => removeAlert(b.dataset.id)));
+
   if (!detailSeries.length) {
     host.innerHTML = `<p class="loading">No history for ${esc(state.selected || "")} over ${esc(state.period)}.</p>`;
     return;
@@ -914,6 +1126,10 @@ function renderDetail() {
     series: detailSeries,
     intraday: detailMeta.intraday,
     highRef: high,
+    measure: true,
+    alerts,
+    onAxisClick: openAlertDialog,
+    onAlertRemove: removeAlert,
     yFmt: fmtPrice,
     tipFmt: (v) => `${fmtPrice(v)}  <span style="color:var(--text-muted)">${fmtFromHigh(v, high)}</span>`,
   });
@@ -950,7 +1166,7 @@ function renderCompare() {
 
 /* ---------------------------------------------------------- data loads */
 async function loadLists() {
-  const d = await api("/api/lists");
+  const d = await api("api/lists");
   state.lists = d.lists;
   if (!state.lists.some(l => l.id === state.activeId))
     state.activeId = state.lists[0] ? state.lists[0].id : null;
@@ -967,7 +1183,7 @@ let quotesSeq = 0, historySeq = 0, detailSeq = 0;
 async function loadQuotes() {
   if (!state.activeId) { state.quotes = []; state.symbols = []; renderQuotes(); return; }
   const seq = ++quotesSeq;
-  const d = await api(`/api/quotes?list_id=${encodeURIComponent(state.activeId)}`);
+  const d = await api(`api/quotes?list_id=${encodeURIComponent(state.activeId)}`);
   if (seq !== quotesSeq) return;
   state.quotes = d.quotes;
   state.slots = d.slots || {};
@@ -992,7 +1208,7 @@ async function loadCompare() {
   const host = $("#cmp-host");
   host.classList.add("dim");            // hold the previous render, no skeleton flash
   try {
-    const cmp = await apiCached(`/api/history?symbols=${encodeURIComponent(state.symbols.join(","))}&period=${state.period}`);
+    const cmp = await apiCached(`api/history?symbols=${encodeURIComponent(state.symbols.join(","))}&period=${state.period}`);
     if (seq !== historySeq) return;
     cmpSeries = cmp.series.filter(s => s.close.some(v => v != null)).map(s => {
       const base = s.close.find(v => v != null) || 1;
@@ -1010,7 +1226,7 @@ async function loadDetail() {
   const host = $("#detail-host");
   host.classList.add("dim");
   try {
-    const det = await apiCached(`/api/history?symbols=${encodeURIComponent(want)}&period=${state.period}&granular=true`);
+    const det = await apiCached(`api/history?symbols=${encodeURIComponent(want)}&period=${state.period}&granular=true`);
     if (seq !== detailSeq) return;
     const d0 = det.series[0];
     detailMeta = d0 ? { interval: d0.interval, intraday: d0.intraday } : {};
@@ -1040,7 +1256,7 @@ async function prefetchDetails() {
   prefetching = token;
   for (const sym of state.symbols) {
     if (prefetching !== token) return;      // tab or period moved on
-    const url = `/api/history?symbols=${encodeURIComponent(sym)}&period=${state.period}&granular=true`;
+    const url = `api/history?symbols=${encodeURIComponent(sym)}&period=${state.period}&granular=true`;
     if (wire.has(url)) continue;
     try { await apiCached(url); }
     catch (e) { /* a symbol that will not load is the click's problem, not ours */ }
@@ -1065,7 +1281,7 @@ function markSelected() {
 
 async function moveSymbol(sym, delta) {
   try {
-    const d = await api(`/api/lists/${state.activeId}/symbols/${encodeURIComponent(sym)}/move`, {
+    const d = await api(`api/lists/${state.activeId}/symbols/${encodeURIComponent(sym)}/move`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ delta }),
     });
@@ -1086,7 +1302,7 @@ async function moveSymbol(sym, delta) {
 async function removeSymbol(sym) {
   const l = activeList();
   if (!confirm(`Remove ${sym} from ${l ? l.name : "this list"}?`)) return;
-  const d = await api(`/api/lists/${state.activeId}/symbols/${encodeURIComponent(sym)}`, { method: "DELETE" });
+  const d = await api(`api/lists/${state.activeId}/symbols/${encodeURIComponent(sym)}`, { method: "DELETE" });
   state.lists = d.lists;
   state.hidden.delete(sym);
   await loadQuotes(); await loadHistory();
@@ -1098,7 +1314,7 @@ async function addSymbol() {
   if (!sym) return;
   msg.className = "msg"; msg.textContent = `Checking ${sym}…`;
   try {
-    const d = await api(`/api/lists/${state.activeId}/symbols`, {
+    const d = await api(`api/lists/${state.activeId}/symbols`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ symbol: sym }),
     });
@@ -1128,7 +1344,7 @@ $("#addsym").addEventListener("keydown", (e) => { if (e.key === "Enter") addSymb
 $("#refresh").addEventListener("click", async () => {
   $("#refresh").disabled = true;
   try {
-    await api("/api/refresh", { method: "POST" });
+    await api("api/refresh", { method: "POST" });
     wire.clear();                 // the server just dropped its copy; drop ours
     await loadQuotes(); await loadHistory();
   }
@@ -1160,11 +1376,12 @@ addEventListener("resize", () => {
    the LAN this is a no-op and you get a plain home-screen shortcut instead.
    Put the app behind HTTPS and the same page becomes installable, unchanged. */
 if ("serviceWorker" in navigator && isSecureContext)
-  navigator.serviceWorker.register("/sw.js").catch(() => {});
+  navigator.serviceWorker.register("sw.js").catch(() => {});
 
 (async function init() {
   try {
     await loadLists();
+    loadAlerts();
     const list = activeList();
     state.symbols = list ? list.symbols.slice() : [];
     state.slots = (list && list.slots) || {};

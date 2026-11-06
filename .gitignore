@@ -18,3 +18,7 @@ daemon.log
 cron.log
 cache.sqlite
 token.txt
+alerts.json
+alerts.json.tmp
+alert_topic.txt
+short_term.json
