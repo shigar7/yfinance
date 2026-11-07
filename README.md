@@ -4,6 +4,9 @@ Hosted behind the gateway in `../..` at `/finance/stonks` and
 `/finance/today_stonks`; it listens on `127.0.0.1:9001`. The frontend uses
 relative URLs only, so it also runs standalone at any path.
 
+`ivv_prediction/` is a separate app kept in this repo, with its own venv and port
+(`127.0.0.1:9003`, `/finance/ivv_prediction/`). See its own README.
+
 A local stock tracker: tabbed watchlists, quotes, and historical charts pulled
 from Yahoo Finance via [`yfinance`](https://github.com/ranaroussi/yfinance).
 

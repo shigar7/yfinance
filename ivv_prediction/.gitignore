@@ -1,0 +1,17 @@
+# virtualenv
+.venv/
+venv/
+
+# python
+__pycache__/
+*.py[cod]
+
+# editors / os
+.vscode/
+.idea/
+.DS_Store
+
+# runtime state
+daemon.pid
+daemon.log
+cron.log
