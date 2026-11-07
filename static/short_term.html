@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Short Term · Stonks</title>
+<link rel="manifest" href="static/manifest.webmanifest">
+<link rel="icon" href="static/icon-192.png" type="image/png">
+<link rel="apple-touch-icon" href="static/apple-touch-icon.png">
+<meta name="theme-color" content="#f9f9f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0d0d0d" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Stonks">
+<style>
+/* tokens are the same as index.html — keep the two in step */
+:root {
+  color-scheme: light;
+  --page:           #f9f9f7;
+  --surface-1:      #fcfcfb;
+  --text-primary:   #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted:     #898781;
+  --gridline:       #e1e0d9;
+  --baseline:       #c3c2b7;
+  --border:         rgba(11,11,11,0.10);
+  --hover:          rgba(11,11,11,0.04);
+  --up:             #006300;
+  --down:           #d03b3b;
+  --series-1:  #2a78d6; --series-2:  #eb6834; --series-3:  #1baf7a; --series-4:  #eda100;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page:           #0d0d0d;
+    --surface-1:      #1a1a19;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --baseline:       #383835;
+    --border:         rgba(255,255,255,0.10);
+    --hover:          rgba(255,255,255,0.05);
+    --up:             #0ca30c;
+    --down:           #e66767;
+    --series-1:  #3987e5; --series-2:  #d95926; --series-3:  #199e70; --series-4:  #c98500;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page:           #0d0d0d;
+  --surface-1:      #1a1a19;
+  --text-primary:   #ffffff;
+  --text-secondary: #c3c2b7;
+  --text-muted:     #898781;
+  --gridline:       #2c2c2a;
+  --baseline:       #383835;
+  --border:         rgba(255,255,255,0.10);
+  --hover:          rgba(255,255,255,0.05);
+  --up:             #0ca30c;
+  --down:           #e66767;
+  --series-1:  #3987e5; --series-2:  #d95926; --series-3:  #199e70; --series-4:  #c98500;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 0 16px 64px;
+  background: var(--page); color: var(--text-primary);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 14px; line-height: 1.5;
+}
+.wrap { max-width: 1140px; margin: 0 auto; }
+
+header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; padding: 28px 0 18px; }
+h1 { font-size: 20px; font-weight: 650; margin: 0; letter-spacing: -0.01em; }
+.back { color: var(--text-muted); font-size: 13px; text-decoration: none; }
+.back:hover { color: var(--text-primary); }
+.spacer { flex: 1 1 auto; }
+
+button {
+  font: inherit; color: var(--text-secondary); background: var(--surface-1);
+  border: 1px solid var(--border); border-radius: 7px;
+  padding: 5px 11px; cursor: pointer;
+}
+button:hover { background: var(--hover); color: var(--text-primary); }
+button[aria-pressed="true"] { background: var(--text-primary); color: var(--surface-1); border-color: var(--text-primary); }
+
+.status { display: inline-flex; align-items: center; gap: 7px; color: var(--text-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--baseline); flex: none; }
+.dot.live { background: var(--up); animation: pulse 2s ease-in-out infinite; }
+.dot.err { background: var(--down); }
+@keyframes pulse { 50% { opacity: 0.35; } }
+
+.filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 18px; }
+.filters .label { color: var(--text-muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; margin-right: 2px; }
+.seg { display: inline-flex; background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button { border: none; border-radius: 0; border-right: 1px solid var(--border); }
+.seg button:last-child { border-right: none; }
+
+.card {
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 12px; padding: 18px 20px; margin-bottom: 20px;
+}
+.card h2 { font-size: 14px; font-weight: 620; margin: 0; }
+.card .sub { color: var(--text-muted); font-size: 12px; margin: 2px 0 0; }
+.interval-tag {
+  font-size: 11px; color: var(--text-muted); border: 1px solid var(--border);
+  border-radius: 5px; padding: 1px 6px; margin-left: 8px; font-weight: 400;
+}
+
+/* one tile per symbol: the live number, its move, and how old it is */
+.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 20px; }
+.tile { margin: 0; padding: 14px 16px; }
+.tile .head { display: flex; align-items: center; gap: 7px; font-weight: 620; }
+.tile .head .nm { color: var(--text-muted); font-weight: 400; font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile .figure {
+  display: inline-block; font-size: 26px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.15;
+  font-variant-numeric: tabular-nums; border-radius: 6px; padding: 0 4px; margin: 6px -4px 2px;
+  transition: background-color 1.2s ease-out;
+}
+.tile .figure.tick-up   { background: color-mix(in srgb, var(--up) 22%, transparent); transition: none; }
+.tile .figure.tick-down { background: color-mix(in srgb, var(--down) 22%, transparent); transition: none; }
+.tile .delta { font-size: 13px; font-weight: 560; font-variant-numeric: tabular-nums; }
+.tile .meta { color: var(--text-muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+
+.card-head { margin-bottom: 14px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 14px; }
+.legend button {
+  display: inline-flex; align-items: center; gap: 7px;
+  background: none; border: none; padding: 3px 4px; color: var(--text-secondary);
+  font-size: 12px; border-radius: 6px; font-variant-numeric: tabular-nums;
+}
+.legend button:hover { background: var(--hover); }
+.legend button[aria-pressed="false"] { opacity: 0.4; }
+.tip .t-row { display: flex; align-items: center; gap: 7px; justify-content: space-between; white-space: nowrap; }
+.tip .t-nm { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); }
+.tip .t-raw { color: var(--text-muted); }
+.up { color: var(--up); } .down { color: var(--down); }
+
+.chart-host { position: relative; width: 100%; }
+svg { display: block; width: 100%; overflow: visible; }
+svg .hit { touch-action: pan-y; cursor: crosshair; }
+.tip {
+  position: absolute; pointer-events: none; z-index: 5;
+  background: var(--surface-1); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; font-size: 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.13); min-width: 120px;
+  opacity: 0; transition: opacity .1s; font-variant-numeric: tabular-nums;
+}
+.tip.on { opacity: 1; }
+.tip .t-date { color: var(--text-muted); margin-bottom: 3px; font-size: 11px; }
+.loading { color: var(--text-muted); font-size: 13px; padding: 26px 0; }
+.note { color: var(--text-muted); font-size: 11.5px; margin: 4px 0 0; }
+
+/* four tiles in a row stop fitting their figures well before phone width */
+@media (max-width: 900px) {
+  .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 620px) {
+  body {
+    padding-left: max(12px, env(safe-area-inset-left, 0px));
+    padding-right: max(12px, env(safe-area-inset-right, 0px));
+    padding-bottom: calc(48px + env(safe-area-inset-bottom, 0px));
+  }
+  header { padding: 18px 0 12px; gap: 8px; }
+  h1 { font-size: 18px; }
+  .card { padding: 13px 12px; margin-bottom: 14px; }
+  .filters .label { display: none; }
+  .seg { display: grid; grid-template-columns: repeat(5, 1fr); width: 100%; }
+  .seg button { padding: 9px 2px; text-align: center; }
+  .tiles { grid-template-columns: 1fr; gap: 8px; margin-bottom: 14px; }
+  .tile { padding: 10px 12px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 0 10px; }
+  .tile .head { grid-column: 1 / -1; }
+  .tile .figure { font-size: 22px; margin: 4px -4px 0; }
+  .tile .delta { text-align: right; }
+  .tile .meta { grid-column: 1 / -1; }
+  .legend { gap: 4px 10px; margin-top: 10px; }
+  .legend button { padding: 5px 4px; }
+  .tip { min-width: 92px; font-size: 11px; padding: 7px 9px; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Short term</h1>
+  <a class="back" href="stonks">&larr; Watchlists</a>
+  <span class="spacer"></span>
+  <span class="status"><span class="dot" id="dot"></span><span id="status">Connecting…</span></span>
+  <button id="theme" title="Toggle light / dark">Theme</button>
+</header>
+
+<div class="filters">
+  <span class="label">Window</span>
+  <div class="seg" id="windows"></div>
+</div>
+
+<div class="tiles" id="tiles"></div>
+
+<section class="card">
+  <div class="card-head">
+    <h2>Rates, oil, gold and the S&amp;P<span class="interval-tag">1m bars</span></h2>
+    <p class="sub" id="chart-sub">Left axis % change, right axis ES=F price</p>
+  </div>
+  <div class="chart-host" id="chart"><p class="loading">Loading…</p></div>
+  <div class="legend" id="legend"></div>
+</section>
+
+<p class="note">One-minute bars, overnight sessions included; hours when nothing trades are
+  squeezed out so the lines stay continuous, and ^TNX breaks where its market is shut. ^TNX is a
+  yield, so its line is the % change in the yield itself — the tiles give its move in basis
+  points. ES=F is drawn in index points against the right-hand axis. The page checks for new data every 5 seconds while it is open. That is as live as
+  Yahoo's free feed gets: CME futures reach it about 10 minutes late and ^TNX about 15, so each
+  tile says how old its last trade is. Drag across the chart to see the change between two
+  moments — two fingers on a phone.</p>
+
+</div>
+
+<script>
+/* ---------------------------------------------------------------- state */
+const SYMBOLS = [
+  { symbol: "^TNX", label: "US 10-year yield", slot: 1, dp: 3, bp: true },
+  // ES reads in points on its own right-hand axis; the others share the
+  // left axis as % change, since a yield, a barrel and an ounce have no common unit.
+  { symbol: "ES=F", label: "S&P 500 E-mini",   slot: 2, dp: 2, axis: "right" },
+  { symbol: "CL=F", label: "WTI crude",        slot: 3, dp: 2 },
+  { symbol: "GC=F", label: "Gold",             slot: 4, dp: 1 },
+];
+// Seconds of trading shown; null is everything held (seven days). {sessions}
+// counts trading days rather than clock time, so a 5D that spans a weekend
+// still holds five days of trading, as Yahoo's own 5d does.
+const WINDOWS = { "7D": null, "5D": { sessions: 5 }, "1D": 86400, "4H": 4 * 3600, "1H": 3600 };
+const POLL_MS = 5000;
+// Today's bars arrive with every poll; the seven days only need reloading
+// after the tab has slept long enough for its tail to have gone stale.
+const HISTORY_RELOAD_MS = 10 * 60 * 1000;
+
+const savedWin = localStorage.getItem("st.window");
+const state = {
+  window: savedWin in WINDOWS ? savedWin : "5D",
+  series: {},           // symbol -> {t: [...epoch s], close: [...]}
+  quotes: {},           // symbol -> latest live quote
+  hidden: new Set(),    // legend toggles
+  historyAt: 0,
+  lastOk: 0,
+  failing: false,
+};
+
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const cfg = (sym) => SYMBOLS.find(s => s.symbol === sym);
+const fmt = (v, dp) => v == null ? "—"
+  : v.toLocaleString(undefined, { minimumFractionDigits: dp, maximumFractionDigits: dp });
+const fmtPct = (v) => v == null ? "—" : Math.abs(v) < 0.005 ? "0.00%" : (v >= 0 ? "+" : "") + v.toFixed(2) + "%";
+const dirClass = (v) => v == null ? "" : v >= 0 ? "up" : "down";
+const clock = (t, secs) => new Date(t * 1000).toLocaleTimeString(undefined,
+  secs ? { hour: "2-digit", minute: "2-digit", second: "2-digit" } : { hour: "2-digit", minute: "2-digit" });
+const dayLabel = (t) => new Date(t * 1000).toLocaleDateString(undefined, { weekday: "short", day: "numeric" });
+
+function ago(secs) {
+  if (secs < 90) return `${Math.max(0, Math.round(secs))}s`;
+  if (secs < 5400) return `${Math.round(secs / 60)} min`;
+  if (secs < 172800) return `${Math.round(secs / 3600)} h`;
+  return `${Math.round(secs / 86400)} days`;
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, { cache: "no-store", ...opts });
+  if (!r.ok) {
+    let detail = r.statusText;
+    try { detail = (await r.json()).detail || detail; } catch (e) {}
+    throw new Error(detail);
+  }
+  return r.json();
+}
+
+/* ---------------------------------------------------------------- tiles */
+const colorOf = (sym) => `var(--series-${cfg(sym).slot})`;
+$("#tiles").innerHTML = SYMBOLS.map(s => `
+  <section class="card tile" data-tile="${esc(s.symbol)}">
+    <div class="head"><span class="swatch" style="background:${colorOf(s.symbol)}"></span>
+      <span>${esc(s.symbol)}</span><span class="nm" data-nm>${esc(s.label)}</span></div>
+    <span class="figure" data-fig>—</span>
+    <span class="delta" data-delta></span>
+    <div class="meta" data-meta>Loading…</div>
+  </section>`).join("");
+const tilePart = (sym, part) => document.querySelector(`[data-tile="${CSS.escape(sym)}"] [data-${part}]`);
+
+function renderTile(sym) {
+  const c = cfg(sym), q = state.quotes[sym];
+  if (!q) return;
+  if (q.name && q.name !== sym) tilePart(sym, "nm").textContent = `${c.label} · ${q.name}`;
+  const chg = q.price != null && q.prevClose != null ? q.price - q.prevClose : null;
+  const pct = chg != null && q.prevClose ? chg / q.prevClose * 100 : null;
+  tilePart(sym, "fig").textContent = fmt(q.price, c.dp) + (c.bp ? "%" : "");
+  const delta = tilePart(sym, "delta");
+  delta.className = "delta " + dirClass(chg);
+  // A yield's move is read in basis points, not as a percentage of itself.
+  delta.textContent = c.bp
+    ? (chg == null ? "—" : `${chg >= 0 ? "+" : ""}${(chg * 100).toFixed(1)} bp`)
+    : `${chg == null ? "—" : (chg >= 0 ? "+" : "") + fmt(chg, c.dp)} (${fmtPct(pct)})`;
+  const age = q.time ? Date.now() / 1000 - q.time : null;
+  tilePart(sym, "meta").innerHTML = `prev close ${fmt(q.prevClose, c.dp)}${
+    q.time ? ` · last trade ${clock(q.time, true)}, <span data-age>${ago(age)}</span> ago` : ""}`;
+}
+
+function flash(sym, dir) {
+  const fig = tilePart(sym, "fig");
+  fig.classList.add(dir > 0 ? "tick-up" : "tick-down");
+  requestAnimationFrame(() => requestAnimationFrame(() => fig.classList.remove("tick-up", "tick-down")));
+}
+
+/* ---------------------------------------------------------------- chart
+   One clock for all three: the union of every bar's minute. x is position on
+   that clock, not time, so a weekend or a daily halt that nothing trades
+   through takes no width. ^TNX keeps shorter hours than the futures, so its
+   line breaks wherever its own bars are more than half an hour apart rather
+   than drawing a flat line across the night. */
+function niceStep(raw) {
+  const p = Math.pow(10, Math.floor(Math.log10(Math.abs(raw) || 1)));
+  const n = raw / p;
+  return (n < 1.5 ? 1 : n < 3 ? 2 : n < 7 ? 5 : 10) * p;
+}
+
+const GAP = 1800;
+
+function buildView() {
+  const all = SYMBOLS.map(s => {
+    const h = state.series[s.symbol] || { t: [], close: [] };
+    const t = [], v = [];
+    h.t.forEach((x, i) => { if (h.close[i] != null) { t.push(x); v.push(h.close[i]); } });
+    return { symbol: s.symbol, t, v };
+  }).filter(s => s.t.length);
+  if (!all.length) return null;
+  const end = Math.max(...all.map(s => s.t[s.t.length - 1]));
+  const span = WINDOWS[state.window];
+  let from = -Infinity;
+  if (typeof span === "number") from = end - span;
+  else if (span) {
+    // A session is a run of the shared clock with no gap over GAP — for the
+    // futures that is one trading day, split by the daily halt.
+    const held = [...new Set(all.flatMap(s => s.t))].sort((a, b) => a - b);
+    const starts = [0];
+    for (let i = 1; i < held.length; i++) if (held[i] - held[i - 1] > GAP) starts.push(i);
+    from = held[starts[Math.max(0, starts.length - span.sessions)]];
+  }
+  const clockSet = new Set();
+  const series = all.map(s => {
+    let i = s.t.findIndex(x => x >= from);
+    if (i < 0) i = s.t.length;
+    const t = s.t.slice(i), raw = s.v.slice(i);
+    t.forEach(x => clockSet.add(x));
+    const base = raw[0];
+    return { symbol: s.symbol, t, raw, pct: raw.map(v => (v / base - 1) * 100), base };
+  }).filter(s => s.t.length > 1);
+  const T = [...clockSet].sort((a, b) => a - b);
+  const pos = new Map(T.map((x, i) => [x, i]));
+  series.forEach(s => { s.x = s.t.map(x => pos.get(x)); });
+  return { T, pos, series };
+}
+
+const onRight = (sym) => cfg(sym).axis === "right";
+
+function renderLegend(view) {
+  $("#legend").innerHTML = SYMBOLS.map(c => {
+    const s = view && view.series.find(x => x.symbol === c.symbol);
+    const pct = s ? s.pct[s.pct.length - 1] : null;
+    const price = s && onRight(c.symbol) ? `${fmt(s.raw[s.raw.length - 1], c.dp)} ` : "";
+    return `<button data-leg="${esc(c.symbol)}" aria-pressed="${!state.hidden.has(c.symbol)}">
+      <span class="swatch" style="background:${colorOf(c.symbol)}"></span>
+      <span>${esc(c.symbol)} <span style="color:var(--text-muted)">${onRight(c.symbol) ? "right" : "left"}</span></span>
+      <span>${price}<span class="${dirClass(pct)}">${fmtPct(pct)}</span></span></button>`;
+  }).join("");
+  $("#legend").querySelectorAll("[data-leg]").forEach(b => b.addEventListener("click", () => {
+    const sym = b.dataset.leg;
+    state.hidden.has(sym) ? state.hidden.delete(sym) : state.hidden.add(sym);
+    renderChart();
+    saveHidden();
+  }));
+}
+
+/* Two y-scales, never one shared one: the left is % change from the window's
+   start for ^TNX, CL=F and GC=F, the right is ES=F in index points. Gridlines belong
+   to the left axis; the right axis gets its own round numbers as ticks on the
+   edge, so neither set of labels is forced onto the other's lines. Each
+   series' last value is tagged on the axis that measures it. */
+/* The 5-second poll redraws the chart from scratch, so what the pointer is
+   doing lives out here, by bar time rather than position: a measurement being
+   dragged or read survives the redraw, and is dropped only once the window
+   has scrolled past where it started. */
+let meas = null;        // {t0, t1, dragging}
+let hoverT = null;
+
+function renderChart() {
+  const host = $("#chart");
+  const view = buildView();
+  renderLegend(view);
+  const live = view ? view.series.filter(s => !state.hidden.has(s.symbol)) : [];
+  if (!live.length) { host.innerHTML = `<p class="loading">${view ? "Every series is hidden — pick one in the legend." : "No bars from Yahoo yet."}</p>`; return; }
+  const { T, pos } = view, n = T.length;
+  if (n > 1) $("#chart-sub").textContent =
+    `Left axis: % change since ${dayLabel(T[0])} ${clock(T[0])}, the start of the ${state.window} window. Right axis: ES=F price.`;
+
+  const left = live.filter(s => !onRight(s.symbol)), right = live.filter(s => onRight(s.symbol));
+  const W = Math.max(host.clientWidth || 640, 280);
+  const narrow = W < 520, fs = narrow ? 10 : 11, gut = narrow ? 5 : 8;
+
+  const range = (list, key, withZero) => {
+    let lo = withZero ? 0 : Infinity, hi = withZero ? 0 : -Infinity;
+    list.forEach(s => s[key].forEach(v => { if (v < lo) lo = v; if (v > hi) hi = v; }));
+    const pad = (hi - lo) * 0.08 || Math.abs(hi) * 0.001 || 0.1;
+    return [lo - pad, hi + pad];
+  };
+  const L = left.length ? range(left, "pct", true) : null;
+  const R = right.length ? range(right, "raw", false) : null;
+  const esDp = cfg("ES=F").dp;
+
+  const lStep = L && niceStep((L[1] - L[0]) / 5);
+  const dpY = !lStep ? 0 : lStep >= 1 ? 0 : lStep >= 0.1 ? 1 : 2;
+  const pf = (v) => (v > 0 ? "+" : "") + (Math.abs(v) < 1e-9 ? 0 : v).toFixed(dpY) + "%";
+  const rStep = R && niceStep((R[1] - R[0]) / 5);
+  const rDp = !rStep ? esDp : rStep >= 1 ? 0 : 2;
+  const rf = (v) => fmt(v, rDp);
+
+  const rWide = R ? Math.max(rf(R[0]).length, rf(R[1]).length, fmt(R[1], esDp).length) : 0;
+  const M = {
+    t: 24, b: 30,
+    l: L ? (narrow ? 46 : 56) : 10,
+    r: R ? Math.ceil(rWide * fs * 0.62) + gut + 10 : 10,
+  };
+  const ih = Math.min(Math.max(W * 0.38, narrow ? 220 : 260), 420);
+  const H = ih + M.t + M.b, iw = W - M.l - M.r;
+  const X = (i) => M.l + (n > 1 ? (i / (n - 1)) * iw : iw / 2);
+  const YL = L && ((v) => M.t + ih - ((v - L[0]) / (L[1] - L[0])) * ih);
+  const YR = R && ((v) => M.t + ih - ((v - R[0]) / (R[1] - R[0])) * ih);
+  live.forEach(s => {
+    s.v = onRight(s.symbol) ? s.raw : s.pct;
+    s.Y = onRight(s.symbol) ? YR : YL;
+  });
+
+  const P = [`<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img"
+      aria-label="${esc(left.map(s => s.symbol).join(" and "))}${left.length && right.length ? " as % change, " : ""}${right.length ? "ES=F price" : ""} over the ${esc(state.window)} window">`];
+  const esCol = colorOf("ES=F");
+  if (L) {
+    for (let v = Math.ceil(L[0] / lStep) * lStep; v <= L[1] + 1e-9; v += lStep) {
+      P.push(`<line x1="${M.l}" y1="${YL(v).toFixed(1)}" x2="${M.l + iw}" y2="${YL(v).toFixed(1)}" stroke="var(--gridline)"/>`);
+      P.push(`<text x="${M.l - gut}" y="${(YL(v) + 3.5).toFixed(1)}" text-anchor="end" font-size="${fs}" fill="var(--text-muted)" style="font-variant-numeric:tabular-nums">${pf(v)}</text>`);
+    }
+    P.push(`<line x1="${M.l}" y1="${YL(0).toFixed(1)}" x2="${M.l + iw}" y2="${YL(0).toFixed(1)}" stroke="var(--baseline)" stroke-width="1.2"/>`);
+    P.push(`<text x="${M.l - gut}" y="${M.t - 10}" text-anchor="end" font-size="${fs}" fill="var(--text-muted)">% chg</text>`);
+  }
+  if (R) {
+    if (!L) for (let v = Math.ceil(R[0] / rStep) * rStep; v <= R[1] + 1e-9; v += rStep)
+      P.push(`<line x1="${M.l}" y1="${YR(v).toFixed(1)}" x2="${M.l + iw}" y2="${YR(v).toFixed(1)}" stroke="var(--gridline)"/>`);
+    P.push(`<line x1="${M.l + iw}" y1="${M.t}" x2="${M.l + iw}" y2="${M.t + ih}" stroke="${esCol}" stroke-opacity="0.45"/>`);
+    for (let v = Math.ceil(R[0] / rStep) * rStep; v <= R[1] + 1e-9; v += rStep) {
+      P.push(`<line x1="${M.l + iw}" y1="${YR(v).toFixed(1)}" x2="${M.l + iw + 4}" y2="${YR(v).toFixed(1)}" stroke="${esCol}" stroke-opacity="0.6"/>`);
+      P.push(`<text x="${M.l + iw + gut}" y="${(YR(v) + 3.5).toFixed(1)}" font-size="${fs}" fill="${esCol}" style="font-variant-numeric:tabular-nums">${rf(v)}</text>`);
+    }
+    P.push(`<text x="${M.l + iw + gut}" y="${M.t - 10}" font-size="${fs}" fill="${esCol}">ES=F</text>`);
+  }
+
+  // Session breaks: where the shared clock jumps by more than half an hour.
+  const breaks = [0];
+  for (let i = 1; i < n; i++) if (T[i] - T[i - 1] > GAP) breaks.push(i);
+  const multiDay = T[n - 1] - T[0] > 86400 * 1.2;
+  breaks.forEach((b, k) => {
+    if (k) P.push(`<line x1="${X(b).toFixed(1)}" y1="${M.t}" x2="${X(b).toFixed(1)}" y2="${M.t + ih}" stroke="var(--baseline)" stroke-dasharray="2 3"/>`);
+  });
+  const xl = [];
+  if (multiDay) {
+    let lastX = -1e9;
+    breaks.forEach(b => { if (X(b) - lastX > (narrow ? 44 : 60)) { xl.push([b, dayLabel(T[b])]); lastX = X(b); } });
+  } else {
+    const want = narrow ? 4 : 6;
+    for (let k = 0; k < want; k++) { const i = Math.round(k * (n - 1) / (want - 1)); xl.push([i, clock(T[i])]); }
+  }
+  P.push(`<line x1="${M.l}" y1="${M.t + ih}" x2="${M.l + iw}" y2="${M.t + ih}" stroke="var(--baseline)"/>`);
+  xl.forEach(([i, s], k) => P.push(`<text x="${X(i).toFixed(1)}" y="${M.t + ih + 18}" font-size="${fs}" fill="var(--text-muted)"
+      text-anchor="${multiDay ? "start" : k === 0 ? "start" : k === xl.length - 1 ? "end" : "middle"}">${esc(s)}</text>`));
+
+  // Thousands of bars into a few hundred pixels: within each run of a
+  // series, keep every pixel column's low and high in time order, so a
+  // one-minute spike survives the squeeze.
+  const cols = Math.max(1, Math.floor(iw));
+  live.forEach(s => {
+    const runs = [];
+    let cur = [];
+    s.x.forEach((xi, k) => {
+      if (k && s.t[k] - s.t[k - 1] > GAP) { runs.push(cur); cur = []; }
+      cur.push(k);
+    });
+    runs.push(cur);
+    const d = runs.filter(r => r.length).map(run => {
+      const pts = [];
+      let col = -1, mn = -1, mx = -1;
+      const flush = () => { if (col < 0) return; (mn < mx ? [mn, mx] : mx < mn ? [mx, mn] : [mn]).forEach(k => pts.push(k)); };
+      run.forEach(k => {
+        const c = Math.floor((s.x[k] / Math.max(n - 1, 1)) * cols);
+        if (c !== col) { flush(); col = c; mn = mx = k; }
+        else { if (s.v[k] < s.v[mn]) mn = k; if (s.v[k] > s.v[mx]) mx = k; }
+      });
+      flush();
+      if (pts[pts.length - 1] !== run[run.length - 1]) pts.push(run[run.length - 1]);
+      return pts.map((k, i) => `${i ? "L" : "M"}${X(s.x[k]).toFixed(1)},${s.Y(s.v[k]).toFixed(1)}`).join("");
+    }).join(" ");
+    P.push(`<path d="${d}" fill="none" stroke="${colorOf(s.symbol)}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>`);
+  });
+
+  // Last-value tags, each on its own axis, nudged apart so they never stack.
+  const tags = live.map(s => {
+    const k = s.v.length - 1;
+    return { s, right: onRight(s.symbol), x: X(s.x[k]), yLine: s.Y(s.v[k]), y: s.Y(s.v[k]),
+             text: onRight(s.symbol) ? fmt(s.v[k], esDp) : pf(s.v[k]).replace(/(\.\d)\d*%/, "$1%").replace(/^([+-]?\d+)%$/, "$1.0%") };
+  });
+  [false, true].forEach(side => {
+    const group = tags.filter(t => t.right === side).sort((a, b) => a.y - b.y);
+    for (let i = 1; i < group.length; i++) if (group[i].y - group[i - 1].y < 19) group[i].y = group[i - 1].y + 19;
+  });
+  tags.forEach(t => {
+    const col = colorOf(t.s.symbol);
+    P.push(`<circle cx="${t.x.toFixed(1)}" cy="${t.yLine.toFixed(1)}" r="3.2" fill="${col}" stroke="var(--surface-1)" stroke-width="1.5"/>`);
+    const w = t.right ? M.r - 4 : M.l - 4, x0 = t.right ? M.l + iw + 2 : 1;
+    if (t.right) P.push(`<line x1="${t.x.toFixed(1)}" y1="${t.yLine.toFixed(1)}" x2="${x0}" y2="${t.y.toFixed(1)}" stroke="${col}" stroke-dasharray="1 2"/>`);
+    P.push(`<rect x="${x0}" y="${(t.y - 9).toFixed(1)}" width="${w}" height="18" rx="4" fill="${col}"/>`);
+    P.push(`<text x="${x0 + w / 2}" y="${(t.y + 3.8).toFixed(1)}" text-anchor="middle" font-size="${fs}" font-weight="600"
+        fill="var(--surface-1)" style="font-variant-numeric:tabular-nums">${esc(t.text)}</text>`);
+  });
+
+  // drag-to-measure: the shaded span, and a dot on each series where it began
+  P.push(`<rect class="band" y="${M.t}" height="${ih}" fill="var(--text-primary)" fill-opacity="0.07" style="display:none"/>`);
+  P.push(`<g class="anchor" style="display:none"><line stroke="var(--baseline)"/>
+      ${live.map(s => `<circle r="4.5" fill="${colorOf(s.symbol)}" stroke="var(--surface-1)" stroke-width="2"/>`).join("")}</g>`);
+  P.push(`<g class="cross" style="display:none"><line stroke="var(--baseline)"/>
+      ${live.map(s => `<circle r="4.5" fill="${colorOf(s.symbol)}" stroke="var(--surface-1)" stroke-width="2"/>`).join("")}</g>`);
+  P.push(`<rect x="${M.l}" y="${M.t}" width="${iw}" height="${ih}" fill="transparent" class="hit"/>`);
+  P.push(`</svg><div class="tip"></div>`);
+  host.innerHTML = P.join("");
+
+  const svg = host.querySelector("svg"), tip = host.querySelector(".tip");
+  const cross = svg.querySelector(".cross"), vline = cross.querySelector("line");
+  const dots = [...cross.querySelectorAll("circle")];
+  // For each series, its last bar at or before a clock position — within the
+  // same session, or nothing.
+  const at = (s, i) => {
+    let lo2 = 0, hi2 = s.x.length - 1, k = -1;
+    while (lo2 <= hi2) { const m = (lo2 + hi2) >> 1; if (s.x[m] <= i) { k = m; lo2 = m + 1; } else hi2 = m - 1; }
+    return k >= 0 && T[i] - s.t[k] <= GAP ? k : -1;
+  };
+  const band = svg.querySelector(".band"), anchor = svg.querySelector(".anchor");
+  const aline = anchor.querySelector("line"), adots = [...anchor.querySelectorAll("circle")];
+
+  const idxAt = (clientX) => {
+    const r = svg.getBoundingClientRect();
+    const cx = (clientX - r.left) * (W / r.width);
+    return Math.max(0, Math.min(n - 1, Math.round(((cx - M.l) / iw) * (n - 1))));
+  };
+  const place = (g, line, ds, i) => {
+    g.style.display = "";
+    line.setAttribute("x1", X(i)); line.setAttribute("x2", X(i));
+    line.setAttribute("y1", M.t); line.setAttribute("y2", M.t + ih);
+    live.forEach((s, j) => {
+      const k = at(s, i);
+      if (k < 0) { ds[j].style.display = "none"; return; }
+      ds[j].style.display = "";
+      ds[j].setAttribute("cx", X(s.x[k])); ds[j].setAttribute("cy", s.Y(s.v[k]));
+    });
+  };
+  const showTip = (html, i) => {
+    const r = svg.getBoundingClientRect();
+    tip.innerHTML = html;
+    tip.classList.add("on");
+    const scale = r.width / W;
+    let left = X(i) * scale + 14;
+    if (left + tip.offsetWidth > r.width) left = X(i) * scale - tip.offsetWidth - 14;
+    tip.style.left = Math.max(0, left) + "px";
+    tip.style.top = (M.t * scale + 6) + "px";
+  };
+  const when = (i) => `${dayLabel(T[i])} ${clock(T[i])}`;
+  const swatch = (s) => `<span class="t-nm"><span class="swatch" style="background:${colorOf(s.symbol)}"></span>${esc(s.symbol)}</span>`;
+
+  const hover = (i) => {
+    band.style.display = "none"; anchor.style.display = "none";
+    place(cross, vline, dots, i);
+    const rows = [];
+    live.forEach((s) => {
+      const k = at(s, i);
+      if (k < 0) return;
+      const c = cfg(s.symbol);
+      const raw = `${fmt(s.raw[k], c.dp)}${c.bp ? "%" : ""}`, pct = `<span class="${dirClass(s.pct[k])}">${fmtPct(s.pct[k])}</span>`;
+      rows.push(`<div class="t-row">${swatch(s)}
+        <span>${onRight(s.symbol) ? `<b>${raw}</b> ${pct}` : `${pct} <span class="t-raw">${raw}</span>`}</span></div>`);
+    });
+    showTip(`<div class="t-date">${esc(when(i))}</div>${rows.join("")}`, i);
+  };
+
+  // Change between two moments, always earlier → later whichever way the drag
+  // went. A yield's change is in basis points, the rest in price and %.
+  const span = (i0, i1) => {
+    const a = Math.min(i0, i1), b = Math.max(i0, i1);
+    band.style.display = "";
+    band.setAttribute("x", X(a)); band.setAttribute("width", Math.max(X(b) - X(a), 1));
+    place(anchor, aline, adots, i0);
+    place(cross, vline, dots, i1);
+    const rows = [];
+    live.forEach((s) => {
+      const k0 = at(s, a), k1 = at(s, b);
+      if (k0 < 0 || k1 < 0) return;
+      const c = cfg(s.symbol), v0 = s.raw[k0], v1 = s.raw[k1], d = v1 - v0;
+      const unit = c.bp ? "%" : "";
+      const chg = c.bp
+        ? `${d >= 0 ? "+" : ""}${(d * 100).toFixed(1)} bp`
+        : `${d >= 0 ? "+" : ""}${fmt(d, c.dp)} (${fmtPct(d / v0 * 100)})`;
+      rows.push(`<div class="t-row">${swatch(s)}
+        <span class="t-raw">${fmt(v0, c.dp)}${unit} → ${fmt(v1, c.dp)}${unit}</span></div>
+        <div class="t-row"><span></span><b class="${dirClass(d)}">${chg}</b></div>`);
+    });
+    showTip(`<div class="t-date">${esc(when(a))} → ${esc(when(b))}</div>${rows.join("")}`, i1);
+  };
+
+  const leave = () => {
+    cross.style.display = "none"; anchor.style.display = "none"; band.style.display = "none";
+    tip.classList.remove("on");
+  };
+
+  // Mouse: press and drag across the chart to measure between the two ends.
+  // The result stays up after release until the next click or the pointer
+  // leaves; a click without a drag goes back to hovering.
+  const finish = (i) => {
+    meas.t1 = T[i];
+    if (meas.t0 === meas.t1) { meas = null; hover(i); }
+    else meas.dragging = false;
+  };
+  const hit = svg.querySelector(".hit");
+  hit.addEventListener("mousedown", (ev) => {
+    if (ev.button !== 0) return;
+    ev.preventDefault();                        // no text selection while dragging
+    const i = idxAt(ev.clientX);
+    meas = { t0: T[i], t1: T[i], dragging: true };
+    hover(i);
+  });
+  hit.addEventListener("mousemove", (ev) => {
+    const i = idxAt(ev.clientX);
+    hoverT = T[i];
+    // button let go outside the chart: the drag ended where it left off
+    if (meas && meas.dragging && !(ev.buttons & 1)) { finish(i); return; }
+    if (meas && meas.dragging) { meas.t1 = T[i]; span(pos.get(meas.t0), i); }
+    else if (!meas) hover(i);
+  });
+  hit.addEventListener("mouseup", (ev) => { if (meas && meas.dragging) finish(idxAt(ev.clientX)); });
+  hit.addEventListener("mouseleave", () => {
+    if (meas && meas.dragging) return;
+    meas = null; hoverT = null; leave();
+  });
+
+  // One finger scrubs; two fingers measure between them.
+  const touch = (ev) => {
+    const t = ev.touches;
+    if (t.length >= 2) {
+      const i0 = idxAt(t[0].clientX), i1 = idxAt(t[1].clientX);
+      meas = { t0: T[Math.min(i0, i1)], t1: T[Math.max(i0, i1)], dragging: true };
+      span(Math.min(i0, i1), Math.max(i0, i1));
+    } else { const i = idxAt(t[0].clientX); hoverT = T[i]; hover(i); }
+  };
+  hit.addEventListener("touchstart", touch, { passive: true });
+  hit.addEventListener("touchmove", touch, { passive: true });
+  hit.addEventListener("touchend", (ev) => { if (!ev.touches.length) { meas = null; hoverT = null; leave(); } });
+
+  // put back whatever the pointer was showing before this redraw
+  if (meas) {
+    if (pos.has(meas.t0) && pos.has(meas.t1)) span(pos.get(meas.t0), pos.get(meas.t1));
+    else meas = null;
+  } else if (hoverT != null && pos.has(hoverT)) hover(pos.get(hoverT));
+}
+
+const renderAll = () => { SYMBOLS.forEach(s => renderTile(s.symbol)); renderChart(); };
+
+/* ----------------------------------------------------------- data flow
+   One load of seven days, then a poll every 5 seconds for today's bars and
+   the last trade. Today's bars replace the tail of the five-day series, so a
+   bar Yahoo revises after the fact is corrected rather than duplicated. */
+async function loadHistory() {
+  const d = await api("api/short_term/history");
+  d.series.forEach(s => { if (s.t.length) state.series[s.symbol] = { t: s.t, close: s.close }; });
+  state.historyAt = Date.now();
+}
+
+function merge(q) {
+  const held = state.series[q.symbol] || { t: [], close: [] };
+  let t = held.t, close = held.close;
+  if (q.t.length) {
+    const cut = t.findIndex(x => x >= q.t[0]);
+    if (cut >= 0) { t = t.slice(0, cut); close = close.slice(0, cut); }
+    t = t.concat(q.t); close = close.concat(q.close);
+  }
+  // The last trade can land in a minute Yahoo has not opened a bar for yet.
+  if (q.price != null && q.time != null) {
+    const minute = Math.floor(q.time / 60) * 60;
+    const last = t.length ? t[t.length - 1] : null;
+    if (last === minute) { close = close.slice(); close[close.length - 1] = q.price; }
+    else if (last == null || minute > last) { t = t.concat([minute]); close = close.concat([q.price]); }
+  }
+  state.series[q.symbol] = { t, close };
+}
+
+async function poll() {
+  try {
+    if (Date.now() - state.historyAt > HISTORY_RELOAD_MS || !Object.keys(state.series).length)
+      await loadHistory();
+    const d = await api("api/short_term/live");
+    d.quotes.forEach(q => {
+      if (q.error && q.price == null) return;
+      const before = state.quotes[q.symbol];
+      state.quotes[q.symbol] = q;
+      merge(q);
+      renderTile(q.symbol);
+      if (before && before.price != null && q.price != null && q.price !== before.price)
+        flash(q.symbol, q.price - before.price);
+    });
+    renderChart();
+    state.lastOk = Date.now();
+    state.failing = false;
+  } catch (e) {
+    state.failing = true;
+    $("#status").textContent = "Could not reach the server: " + e.message;
+  }
+  paintStatus();
+}
+
+function paintStatus() {
+  const dot = $("#dot");
+  dot.className = "dot" + (state.failing ? " err" : document.hidden ? "" : state.lastOk ? " live" : "");
+  if (state.failing) return;
+  if (document.hidden) { $("#status").textContent = "Paused"; return; }
+  if (state.lastOk) $("#status").textContent = `Checked ${ago((Date.now() - state.lastOk) / 1000)} ago`;
+  // trade ages tick between polls
+  SYMBOLS.forEach(s => {
+    const q = state.quotes[s.symbol], el = tilePart(s.symbol, "meta").querySelector("[data-age]");
+    if (q && q.time && el) el.textContent = ago(Date.now() / 1000 - q.time);
+  });
+}
+
+/* A background tab gets nothing from polling but Yahoo's attention, so stop
+   while hidden and catch up at once on return. */
+let timer = null;
+function schedule() {
+  clearTimeout(timer);
+  if (document.hidden) { paintStatus(); return; }
+  timer = setTimeout(async () => { await poll(); schedule(); }, POLL_MS);
+}
+document.addEventListener("visibilitychange", async () => {
+  if (document.hidden) { clearTimeout(timer); paintStatus(); return; }
+  await loadHidden();     // another device may have changed them meanwhile
+  await poll(); schedule();
+});
+setInterval(paintStatus, 1000);
+
+/* -------------------------------------------------------------- wiring */
+$("#windows").innerHTML = Object.keys(WINDOWS).map(w =>
+  `<button data-w="${w}" aria-pressed="${w === state.window}">${w}</button>`).join("");
+$("#windows").querySelectorAll("[data-w]").forEach(b =>
+  b.addEventListener("click", () => {
+    state.window = b.dataset.w;
+    try { localStorage.setItem("st.window", state.window); } catch (e) {}
+    $("#windows").querySelectorAll("[data-w]").forEach(o =>
+      o.setAttribute("aria-pressed", String(o.dataset.w === state.window)));
+    renderChart();
+  }));
+
+$("#theme").addEventListener("click", () => {
+  const cur = document.documentElement.getAttribute("data-theme");
+  const next = cur === "dark" ? "light" : cur === "light" ? "dark"
+    : (matchMedia("(prefers-color-scheme: dark)").matches ? "light" : "dark");
+  document.documentElement.setAttribute("data-theme", next);
+  localStorage.setItem("ft.theme", next);
+  renderAll();
+});
+const savedTheme = localStorage.getItem("ft.theme");
+if (savedTheme) document.documentElement.setAttribute("data-theme", savedTheme);
+
+let rt, lastW = innerWidth;
+addEventListener("resize", () => {
+  if (innerWidth === lastW) return;
+  lastW = innerWidth;
+  clearTimeout(rt); rt = setTimeout(renderChart, 140);
+});
+
+if ("serviceWorker" in navigator && isSecureContext)
+  navigator.serviceWorker.register("sw.js").catch(() => {});
+
+/* Hidden lines are saved on the server so every device agrees. The toggle
+   takes effect at once; a save that fails says so in the status line rather
+   than flipping the line back under the user's finger. */
+async function loadHidden() {
+  try { state.hidden = new Set((await api("api/short_term/prefs")).hidden); }
+  catch (e) { /* show everything rather than nothing */ }
+}
+
+let saving = Promise.resolve();
+function saveHidden() {
+  const body = JSON.stringify({ hidden: [...state.hidden] });
+  // chained, so two quick clicks land on the server in the order they were made
+  saving = saving.then(() => api("api/short_term/prefs", {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body,
+  })).catch(e => { $("#status").textContent = "Could not save hidden lines: " + e.message; });
+}
+
+(async function init() {
+  await loadHidden();
+  await poll();
+  schedule();
+})();
+</script>
+</body>
+</html>

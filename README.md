@@ -1,5 +1,9 @@
 # Stonks Tracker
 
+Hosted behind the gateway in `../..` at `/finance/stonks` and
+`/finance/today_stonks`; it listens on `127.0.0.1:9001`. The frontend uses
+relative URLs only, so it also runs standalone at any path.
+
 A local stock tracker: tabbed watchlists, quotes, and historical charts pulled
 from Yahoo Finance via [`yfinance`](https://github.com/ranaroussi/yfinance).
 
@@ -25,7 +29,7 @@ anything that has to survive you closing it. `service.sh` backgrounds it with a
 PID file:
 
 ```bash
-./service.sh start       # $PORT, default 8000
+./service.sh start       # $PORT, default 9001, loopback only
 ./service.sh status
 ./service.sh restart
 ./service.sh stop
@@ -47,27 +51,10 @@ of those lines will ever fire. Start it from the entrypoint, not just by hand �
 otherwise the schedule dies at the next restart and takes every other cron job
 with it.
 
-## The token
+## Login
 
-Everything except the icons, the manifest, `/sw.js` and `/healthz` needs a
-shared token. Open it once with the token in the URL:
-
-```
-http://<host>:8000/?token=YOUR_TOKEN
-```
-
-The server sets a year-long cookie and redirects to a clean `/`, so the token
-does not linger in history or in a screenshot, and a home-screen launch — which
-starts at `/` with no query string — stays signed in. Scripts can send it as
-`?token=` or an `X-Token:` header instead.
-
-The token is read from `$STONKS_TOKEN` if it is set. Otherwise one is minted on
-first run into `token.txt` (mode 600, gitignored) and reused from there, so a
-restart does not invalidate the link on your phone. To roll it, delete the file
-and restart — every device then has to be re-opened with the new URL.
-
-`/healthz` is deliberately open so `service.sh` and cron can watch the process
-without holding the token. It reports that the server is up and nothing else.
+Login is handled by the gateway (`../../README.md`). This app has no auth of its
+own and must only listen on 127.0.0.1.
 
 ### ⚠️ What this does and does not protect
 
@@ -212,6 +199,38 @@ stay as context. Colours do not change, so the legend still reads. Emphasis is
 resolved against the series actually drawn: hiding the selected symbol from the
 legend leaves all of them solid rather than fading every line at once.
 
+## Price alerts
+
+Click a price on the left axis of a stock's chart to set an alert, above or below
+that price. Alerts show as dotted lines on that stock's chart, and as chips under
+it; click either one's × to remove it, and removing a symbol from its last list
+removes its alerts too.
+
+The app checks once a day at 5pm Sydney time, using the price at that moment, so a
+move that crosses the level and comes back between checks does not fire. A hit
+sends a phone notification through ntfy and removes the alert. The message gives
+the price against the 52-week high, so 70.50 with a high of 75 reads
+`-0.060 YearlyHigh` (70.50 / 75 - 1). If a price or send
+fails, the alert stays for the next day's check. A 5pm missed while the app was
+down runs as soon as it restarts.
+
+The topic is in `alert_topic.txt` and alerts are in `alerts.json`, both gitignored.
+
+## Short term
+
+`/today_stonks` follows `^TNX`, `ES=F`, `CL=F` and `GC=F` closely: seven days of
+one-minute bars (overnight sessions included), with 7D / 5D / 1D / 4H / 1H
+windows, and a poll every 5 seconds for today's bars and the last trade. The symbols are
+fixed in `SHORT_TERM` in `app.py`. Polling stops while the tab is hidden.
+Lines hidden from the chart via the legend are saved in `short_term.json`, so
+they stay hidden across reloads and devices.
+
+It is only as live as Yahoo's free feed: CME futures reach it about 10 minutes
+late and `^TNX` about 15, and Yahoo's websocket streams nothing for the
+futures, so each card shows how old its last trade is. The server holds the
+live fetch for 4 seconds and the seven days for 60, so extra viewers do not
+multiply requests to Yahoo.
+
 ## API
 
 | Endpoint | Purpose |
@@ -227,9 +246,14 @@ legend leaves all of them solid rather than fading every line at once.
 | `GET /api/quotes?list_id={id}` | rows for one list |
 | `GET /api/history?symbols=A,B&period=1Y` | aligned closes for the compare chart |
 | `GET /api/history?symbols=A&period=1Y&granular=true` | finest-interval series |
+| `GET /api/short_term/history` | seven days of 1m bars for the short-term symbols |
+| `GET /api/short_term/prefs` | which short-term lines are hidden |
+| `PUT /api/short_term/prefs` | save them — body `{"hidden": ["GC=F"]}` |
+| `GET /api/short_term/live` | today's 1m bars plus the last trade, for polling |
 | `POST /api/refresh` | drop the cache, memory and disk |
-| `GET /?token=…` | the page; sets the cookie and redirects to `/` |
-| `GET /healthz` | liveness, no token required |
+| `GET /stonks` | the watchlist page |
+| `GET /today_stonks` | the short-term page |
+| `GET /healthz` | liveness, public at the gateway |
 | `GET /sw.js` | service worker, served from the root so its scope covers the origin |
 | `GET /static/…` | icons and the web manifest |
 

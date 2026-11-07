@@ -7,26 +7,35 @@ from __future__ import annotations
 
 import json
 import math
-import os
-import secrets
 import sqlite3
 import threading
 import time
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
+from typing import Literal
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import yfinance as yf
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 ROOT = Path(__file__).parent
 STATIC = ROOT / "static"
 WATCHLIST_FILE = ROOT / "watchlist.json"
+SHORT_TERM_FILE = ROOT / "short_term.json"   # which short-term lines are hidden
+ALERTS_FILE = ROOT / "alerts.json"
+ALERT_TOPIC_FILE = ROOT / "alert_topic.txt"  # the name is the secret, so not in git
+NTFY = "https://ntfy.sh"
+ALERT_TZ = ZoneInfo("Australia/Sydney")
+ALERT_HOUR = 17
 MAX_LISTS = 24
 
 DEFAULT_SYMBOLS = ["ES=F", "CL=F", "IVV.AX", "VAS.AX", "VGB.AX"]
@@ -78,95 +87,20 @@ CACHE_TTL = 3 * 3600    # seconds
 # three hours: retry it after a minute.
 ERROR_TTL = 60
 CACHE_FILE = ROOT / "cache.sqlite"
-TOKEN_FILE = ROOT / "token.txt"
-COOKIE = "stonks_token"
 
 
-def load_token() -> str:
-    """$STONKS_TOKEN wins; otherwise a token is minted once into token.txt and
-    reused from there, so a restart does not invalidate the link on your phone.
-    The file is gitignored — it is the password, and the repo is not."""
-    env = os.environ.get("STONKS_TOKEN", "").strip()
-    if env:
-        return env
-    try:
-        held = TOKEN_FILE.read_text().strip()
-        if held:
-            return held
-    except OSError:
-        pass
-    minted = secrets.token_urlsafe(18)
-    TOKEN_FILE.write_text(minted + "\n")
-    try:
-        TOKEN_FILE.chmod(0o600)
-    except OSError:
-        pass
-    return minted
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    threading.Thread(target=alert_loop, daemon=True, name="alerts").start()
+    yield
 
 
-TOKEN = load_token()
-
-app = FastAPI(title="Stonks Tracker")
+app = FastAPI(title="Stonks Tracker", lifespan=lifespan)
 # These payloads are long arrays of numbers and near-identical date strings,
 # which is close to the best case for gzip: a year of hourly bars goes from
 # ~64KB to ~8KB. Worth far more than server-side speed when the client is a
 # phone on the other end of a slow link.
 app.add_middleware(GZipMiddleware, minimum_size=500)
-
-
-# --------------------------------------------------------------------------
-# authentication — one shared token
-# --------------------------------------------------------------------------
-# The port is reachable from the internet, and every endpoint reads or writes
-# your lists, so the whole app sits behind one token. It arrives as ?token= on
-# the first visit and is kept in a cookie after that, because the manifest's
-# start_url is "/" — a home-screen launch has no query string to carry it.
-#
-# Icons and the manifest stay open: they hold no data, and Chrome fetches the
-# manifest without credentials, so gating it would break installability for
-# nothing.
-OPEN_PATHS = {"/sw.js", "/healthz"}
-
-
-def authorised(request: Request) -> bool:
-    for candidate in (request.query_params.get("token"),
-                      request.headers.get("x-token"),
-                      request.cookies.get(COOKIE)):
-        if candidate and secrets.compare_digest(candidate, TOKEN):
-            return True
-    return False
-
-
-@app.middleware("http")
-async def require_token(request: Request, call_next):
-    path = request.url.path
-    if path in OPEN_PATHS or path.startswith("/static/"):
-        return await call_next(request)
-
-    if not authorised(request):
-        # A bare 401 on the page itself is friendlier than a blank screen, and
-        # tells a scanner nothing it could not already see.
-        if path == "/":
-            return PlainTextResponse(
-                "Stonks Tracker needs a token.\n\n"
-                "Open  http://<this-host>:8000/?token=YOUR_TOKEN  once; it is "
-                "remembered in a cookie after that.\n",
-                status_code=401)
-        return JSONResponse({"detail": "Bad or missing token"}, status_code=401)
-
-    # A token in the URL is a token in history, in logs and in a shared
-    # screenshot. Take it, set the cookie, and send the browser to a clean "/".
-    if path == "/" and request.query_params.get("token"):
-        redirect = RedirectResponse("/", status_code=303)
-        redirect.set_cookie(COOKIE, TOKEN, max_age=365 * 24 * 3600,
-                            httponly=True, samesite="lax", path="/")
-        return redirect
-
-    response = await call_next(request)
-    if path == "/" and not request.cookies.get(COOKIE):
-        response.set_cookie(COOKIE, TOKEN, max_age=365 * 24 * 3600,
-                            httponly=True, samesite="lax", path="/")
-    return response
 
 
 # --------------------------------------------------------------------------
@@ -541,6 +475,80 @@ def fetch_history(symbol: str, period: str, granular: bool = False) -> dict:
     return out
 
 
+# --------------------------------------------------------------------------
+# short term — a fixed set of rate / index / energy futures, followed closely
+# --------------------------------------------------------------------------
+# Seven days of one-minute bars (the finest Yahoo serves, and as far back as
+# it serves them), with the overnight session included — futures trade nearly 23
+# hours and most of the move in ES and CL happens outside the cash session.
+#
+# "Live" is as live as Yahoo's free feed: CME futures arrive ~10 minutes
+# delayed and ^TNX ~15, and Yahoo's websocket streams nothing at all for the
+# futures. So the page polls instead, and these short TTLs mean however many
+# browsers are watching, Yahoo sees one fetch per symbol per window.
+SHORT_TERM = ["^TNX", "ES=F", "CL=F", "GC=F"]
+SHORT_HISTORY_TTL = 60
+SHORT_LIVE_TTL = 4
+
+
+# The legend toggles are kept here rather than in the browser, so a line hidden
+# on the laptop is hidden on the phone too. Anything not in SHORT_TERM is
+# dropped on read, so retiring a symbol can't leave a ghost entry behind.
+def load_short_hidden() -> list[str]:
+    try:
+        raw = json.loads(SHORT_TERM_FILE.read_text())
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return []
+    hidden = raw.get("hidden") if isinstance(raw, dict) else None
+    return [s for s in SHORT_TERM if isinstance(hidden, list) and s in hidden]
+
+
+def save_short_hidden(hidden: list[str]) -> list[str]:
+    hidden = [s for s in SHORT_TERM if s in hidden]
+    SHORT_TERM_FILE.write_text(json.dumps({"hidden": hidden}, indent=2) + "\n")
+    return hidden
+
+
+def epoch_bars(hist: pd.DataFrame) -> tuple[list[int], list]:
+    closes = close_series(hist)
+    return ([int(ts.timestamp()) for ts in closes.index],
+            trim([clean(v) for v in closes.tolist()]))
+
+
+def fetch_short_history(symbol: str) -> dict:
+    out = {"symbol": symbol, "t": [], "close": [], "error": None}
+    try:
+        hist = yf.Ticker(symbol).history(period="7d", interval="1m",
+                                         prepost=True, auto_adjust=False)
+        out["t"], out["close"] = epoch_bars(hist)
+    except Exception as exc:
+        out["error"] = str(exc)[:200]
+    return out
+
+
+def fetch_short_live(symbol: str) -> dict:
+    """Today's 1m bars and the chart metadata in one round trip. The metadata
+    carries the last trade and its time, which can sit inside a bar Yahoo has
+    not closed yet, so the page gets the price before the bar."""
+    out = {"symbol": symbol, "name": symbol, "currency": None, "price": None,
+           "time": None, "prevClose": None, "t": [], "close": [], "error": None}
+    try:
+        tk = yf.Ticker(symbol)
+        hist = tk.history(period="1d", interval="1m", prepost=True, auto_adjust=False)
+        meta = tk.history_metadata or {}
+        out["t"], out["close"] = epoch_bars(hist)
+        out["name"] = meta.get("shortName") or symbol
+        out["currency"] = meta.get("currency")
+        out["price"] = clean(meta.get("regularMarketPrice"))
+        at = meta.get("regularMarketTime")
+        if at is not None:
+            out["time"] = int(pd.Timestamp(at).timestamp()) if not isinstance(at, (int, float)) else int(at)
+        out["prevClose"] = clean(meta.get("chartPreviousClose") or meta.get("previousClose"))
+    except Exception as exc:
+        out["error"] = str(exc)[:200]
+    return out
+
+
 def align(series: list[dict]) -> list[dict]:
     """ASX and CME keep different calendars, so position-indexed series would
     misalign. Reindex every series onto the union of dates and forward-fill."""
@@ -572,6 +580,10 @@ class SymbolIn(BaseModel):
 
 class ListIn(BaseModel):
     name: str
+
+
+class HiddenIn(BaseModel):
+    hidden: list[str]
 
 
 class MoveIn(BaseModel):
@@ -619,6 +631,7 @@ def delete_list(list_id: str):
     entry = find_list(lists, list_id)
     lists.remove(entry)
     save_lists(lists)
+    prune_alerts()
     return {"lists": lists}
 
 
@@ -674,6 +687,7 @@ def remove_symbol(list_id: str, symbol: str):
         raise HTTPException(404, f"{symbol} is not in {entry['name']}")
     entry["symbols"].remove(symbol)
     save_lists(lists)
+    prune_alerts()
     return {"lists": lists}
 
 
@@ -703,6 +717,194 @@ def history(symbols: str, period: str = "1Y", granular: bool = False):
     return {"period": period, "series": series}
 
 
+@app.get("/api/short_term/history")
+def short_term_history():
+    return {"series": cached_many(SHORT_TERM, "st:h:{}", SHORT_HISTORY_TTL, fetch_short_history)}
+
+
+@app.get("/api/short_term/prefs")
+def short_term_prefs():
+    return {"hidden": load_short_hidden()}
+
+
+@app.put("/api/short_term/prefs")
+def set_short_term_prefs(body: HiddenIn):
+    return {"hidden": save_short_hidden(body.hidden)}
+
+
+@app.get("/api/short_term/live")
+def short_term_live():
+    return {"now": int(time.time()),
+            "quotes": cached_many(SHORT_TERM, "st:l:{}", SHORT_LIVE_TTL, fetch_short_live)}
+
+
+# --------------------------------------------------------------------------
+# price alerts — checked once a day, sent to a phone through ntfy
+# --------------------------------------------------------------------------
+# The check lives in this process rather than in cron: crond has died silently
+# on this box before, and this way a 5pm missed during a restart still runs as
+# soon as the app is back. Prices bypass the cache, since a three-hour-old quote
+# could fire or miss an alert on a price that has gone.
+_alerts_lock = threading.Lock()
+
+
+def load_alert_state() -> dict:
+    # A missing file is an empty start, but a corrupt one should fail loudly:
+    # treating it as empty would write over the alerts on the next save.
+    if not ALERTS_FILE.exists():
+        return {"last_poll": None, "alerts": []}
+    return json.loads(ALERTS_FILE.read_text())
+
+
+def save_alert_state(state: dict) -> None:
+    tmp = ALERTS_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(state, indent=2) + "\n")
+    tmp.replace(ALERTS_FILE)
+
+
+def prune_alerts() -> None:
+    """An alert on a symbol that is on no list could not be seen or removed."""
+    listed = {s for entry in load_lists() for s in entry["symbols"]}
+    with _alerts_lock:
+        state = load_alert_state()
+        state["alerts"] = [a for a in state["alerts"] if a["symbol"] in listed]
+        save_alert_state(state)
+
+
+def latest_price(symbol: str) -> float | None:
+    tk = yf.Ticker(symbol)
+    try:
+        price = clean(tk.fast_info.get("lastPrice"))
+        if price is not None:
+            return price
+    except Exception:
+        pass
+    try:
+        closes = close_series(tk.history(period="5d", interval="1d", auto_adjust=False))
+        return clean(closes.iloc[-1]) if len(closes) else None
+    except Exception:
+        return None
+
+
+def year_high_note(symbol: str, price: float) -> str:
+    """Price against the 52-week high, measured as the table does: daily closes
+    plus the live price. Empty if Yahoo fails, which should not cost the alert."""
+    try:
+        closes = close_series(yf.Ticker(symbol).history(period="1y", interval="1d", auto_adjust=False))
+    except Exception:
+        return ""
+    if not len(closes):
+        return ""
+    return f" {price / max(float(closes.max()), price) - 1:+.3f} YearlyHigh"
+
+
+def crossed(alert: dict, price: float) -> bool:
+    return price >= alert["price"] if alert["direction"] == "above" else price <= alert["price"]
+
+
+def send_ntfy(title: str, message: str, tag: str) -> None:
+    topic = ALERT_TOPIC_FILE.read_text().strip()
+    request = urllib.request.Request(f"{NTFY}/{topic}", data=message.encode(),
+                                     headers={"Title": title, "Tags": tag})
+    urllib.request.urlopen(request, timeout=15).close()
+
+
+def poll_alerts() -> list[dict]:
+    """Fire whatever has crossed. An alert is only removed once ntfy has taken
+    the message, so a failed send or a failed price is retried at the next poll."""
+    with _alerts_lock:
+        alerts = load_alert_state()["alerts"]
+    symbols = sorted({a["symbol"] for a in alerts})
+    prices = dict(zip(symbols, POOL.map(latest_price, symbols)))
+    fired = []
+    for alert in alerts:
+        symbol, price = alert["symbol"], prices[alert["symbol"]]
+        if price is None:
+            print(f"alerts: no price for {symbol}, keeping alert {alert['id']}", flush=True)
+            continue
+        if not crossed(alert, price):
+            continue
+        level = fmt_level(alert["price"])
+        try:
+            send_ntfy(f"{symbol} {alert['direction']} {level}",
+                      f"{symbol} is {fmt_level(price)}, {alert['direction']} your {level} alert."
+                      + year_high_note(symbol, price),
+                      "chart_with_upwards_trend" if alert["direction"] == "above"
+                      else "chart_with_downwards_trend")
+        except Exception as error:
+            print(f"alerts: could not send {alert['id']}: {error}", flush=True)
+            continue
+        with _alerts_lock:
+            state = load_alert_state()
+            state["alerts"] = [a for a in state["alerts"] if a["id"] != alert["id"]]
+            save_alert_state(state)
+        fired.append(alert)
+    with _alerts_lock:
+        state = load_alert_state()
+        state["last_poll"] = datetime.now(ALERT_TZ).date().isoformat()
+        save_alert_state(state)
+    print(f"alerts: polled {len(alerts)}, fired {len(fired)}", flush=True)
+    return fired
+
+
+def fmt_level(value: float) -> str:
+    return f"{value:,.2f}" if abs(value) >= 1 else f"{value:.4f}"
+
+
+def poll_due(now: datetime, last_poll: str | None) -> bool:
+    local = now.astimezone(ALERT_TZ)
+    return local.hour >= ALERT_HOUR and last_poll != local.date().isoformat()
+
+
+def alert_loop() -> None:
+    while True:
+        try:
+            if poll_due(datetime.now(ALERT_TZ), load_alert_state()["last_poll"]):
+                poll_alerts()
+        except Exception as error:
+            print(f"alerts: poll failed: {error}", flush=True)
+        time.sleep(60)
+
+
+class AlertIn(BaseModel):
+    symbol: str
+    price: float
+    direction: Literal["above", "below"]
+
+
+@app.get("/api/alerts")
+def get_alerts():
+    with _alerts_lock:
+        return load_alert_state()
+
+
+@app.post("/api/alerts")
+def create_alert(body: AlertIn):
+    symbol = body.symbol.strip().upper()
+    if not math.isfinite(body.price) or body.price <= 0:
+        raise HTTPException(400, "Price must be above zero")
+    if not any(symbol in entry["symbols"] for entry in load_lists()):
+        raise HTTPException(404, f"{symbol} is not on any list")
+    with _alerts_lock:
+        state = load_alert_state()
+        state["alerts"].append({"id": new_id(), "symbol": symbol, "price": body.price,
+                                "direction": body.direction, "created": time.time()})
+        save_alert_state(state)
+        return state
+
+
+@app.delete("/api/alerts/{alert_id}")
+def delete_alert(alert_id: str):
+    with _alerts_lock:
+        state = load_alert_state()
+        kept = [a for a in state["alerts"] if a["id"] != alert_id]
+        if len(kept) == len(state["alerts"]):
+            raise HTTPException(404, "No such alert")
+        state["alerts"] = kept
+        save_alert_state(state)
+        return state
+
+
 @app.post("/api/refresh")
 def refresh():
     invalidate()
@@ -716,14 +918,29 @@ def healthz():
     return {"ok": True}
 
 
+# Pages only: browsers otherwise guess a freshness from the file's age and keep
+# showing an old page after a deploy. no-cache still allows a cheap 304.
+NO_CACHE = {"Cache-Control": "no-cache"}
+
+
 @app.get("/")
-def index():
-    return FileResponse(STATIC / "index.html")
+def root():
+    return RedirectResponse("stonks", status_code=302)
+
+
+@app.get("/stonks")
+def stonks_page():
+    return FileResponse(STATIC / "index.html", headers=NO_CACHE)
+
+
+@app.get("/today_stonks")
+def today_stonks_page():
+    return FileResponse(STATIC / "short_term.html", headers=NO_CACHE)
 
 
 @app.get("/sw.js")
 def service_worker():
-    """Served from the root, not /static, so its scope covers the whole origin.
+    """Served above /static, so its scope covers both pages.
     Chrome requires a registered worker before it will offer to install the app."""
     return FileResponse(STATIC / "sw.js", media_type="text/javascript",
                         headers={"Cache-Control": "no-cache"})

@@ -2,14 +2,14 @@
 # Stonks Tracker daemon control — start/stop/restart/status.
 # `start` is idempotent, so cron can call it on a timer as a keep-alive.
 #
-#   ./service.sh start      # background it on $PORT (default 8000)
+#   ./service.sh start      # background it on $PORT (default 9001)
 #   ./service.sh status
 #   ./service.sh restart
 #   ./service.sh stop
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-PORT="${PORT:-8000}"
-HOST="${HOST:-0.0.0.0}"          # 0.0.0.0 so the port mapping reaches it
+PORT="${PORT:-9001}"
+HOST="${HOST:-127.0.0.1}"        # loopback: no auth here, the gateway on :8000 has the login
 PID_FILE="$DIR/daemon.pid"
 LOG_FILE="$DIR/daemon.log"
 
